@@ -10,6 +10,11 @@ It keeps process memory separate from canon:
 
 ## Install
 
+Tested target:
+
+- Python `3.11` or `3.12`
+- MemPalace `>=3.1,<3.2`
+
 ```bash
 pip install mempalace
 pip install "git+https://github.com/AbubakarMahmood1/writing-sidecar.git"
@@ -24,8 +29,10 @@ pip install -e /path/to/writing-sidecar[dev]
 
 Windows note:
 
+- Python `3.14` is not a supported install target for v1
 - a clean install may still pull a `chroma-hnswlib` build path through MemPalace/Chroma
-- if that happens, either install the needed C++ build tools or reuse an environment where MemPalace's existing dependencies already work
+- on Windows, use Python `3.11` or `3.12` unless you intentionally want to manage native build-tool fallout yourself
+- if you still hit the native build path, either install the needed C++ build tools or reuse an environment where MemPalace's existing dependencies already work
 - `writing-sidecar doctor` checks runtime health after install, but it cannot bypass native wheel/build issues during `pip install`
 
 ## Commands

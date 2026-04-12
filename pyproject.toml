@@ -3,7 +3,7 @@ name = "writing-sidecar"
 version = "0.1.0"
 description = "Standalone CDLC writing sidecar for MemPalace-backed process memory."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.9,<3.14"
 license = "MIT"
 authors = [
     { name = "theab" },
