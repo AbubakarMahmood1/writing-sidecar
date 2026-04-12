@@ -40,15 +40,17 @@ DEFAULT_RUNTIME_DIRNAME = ".mempalace-sidecar-runtime"
 STATE_FILENAME = ".writing-sidecar-state.json"
 STATE_VERSION = 1
 SEARCH_MODE_ROOMS = {
-    "planning": ("brainstorms", "discarded_paths", "audits", "chat_process"),
-    "audit": ("audits", "discarded_paths", "chat_process", "archived_notes"),
-    "history": ("chat_process", "audits", "brainstorms", "discarded_paths"),
+    "planning": ("checkpoints", "brainstorms", "discarded_paths", "audits", "chat_process"),
+    "audit": ("audits", "discarded_paths", "checkpoints", "chat_process", "archived_notes"),
+    "history": ("checkpoints", "audits", "brainstorms", "discarded_paths", "chat_process"),
     "research": ("research", "archived_notes"),
 }
 CONTEXT_MODES = ("startup", "planning", "audit", "history", "research")
 RECAP_MODES = ("restart", "handoff", "continuity")
+MAINTAIN_KINDS = ("checkpoint", "audit", "handoff", "discarded", "closeout")
 FIXED_ROOMS = (
     "chat_process",
+    "checkpoints",
     "brainstorms",
     "audits",
     "discarded_paths",
@@ -59,6 +61,7 @@ LIVE_GATEWAY_FILES = {"AGENTS.md", "CLAUDE.md", "GEMINI.md"}
 LIVE_NOTES_FILES = {"05_Current_Notes.md", "05_Current_Chapter_Notes.md"}
 ROOM_DESCRIPTIONS = {
     "chat_process": "Normalized AI conversations and process chatter tied to this project.",
+    "checkpoints": "Structured session-safe checkpoints captured during startup, planning, and closeout.",
     "brainstorms": "Idea dumps, alternatives, and exploratory notes.",
     "audits": "Review passes, criticism, and structured analysis.",
     "discarded_paths": "Cut scenes, abandoned branches, and paths not chosen.",
@@ -103,6 +106,7 @@ PHASE_LOADOUT = {
         "only the rules needed for the dominant failure",
     ],
     "COMPLETE": [
+        "logs/checkpoints/",
         "logs/audits/",
         "logs/brainstorms/",
         "logs/discarded_paths/",
@@ -471,6 +475,16 @@ def _collect_writing_entries(context: dict, summary: dict, dry_run: bool) -> lis
         planned_entries=planned_entries,
     )
     _copy_tree_if_present(
+        source_dir=context["project_root"] / "logs" / "checkpoints",
+        room_name="checkpoints",
+        source_kind="checkpoint",
+        output_root=context["output_root"],
+        project_root=context["project_root"],
+        summary=summary,
+        dry_run=dry_run,
+        planned_entries=planned_entries,
+    )
+    _copy_tree_if_present(
         source_dir=context["project_root"] / "_story_bible" / "research",
         room_name="research",
         source_kind="research",
@@ -558,7 +572,7 @@ def export_writing_corpus(
     if not dry_run:
         _ensure_dir(context["output_root"])
         _write_export_gitignore(context["output_root"])
-        _write_sidecar_config(context["output_root"], project)
+        _write_sidecar_config(context["output_root"], context["project"])
         for room in FIXED_ROOMS:
             room_dir = context["output_root"] / room
             if room_dir.exists():
@@ -576,7 +590,7 @@ def export_writing_corpus(
         else:
             _mine_exported_sidecar(
                 output_root=context["output_root"],
-                project=project,
+                project=context["project"],
                 palace_path=context["palace_path"],
                 runtime_root=context["runtime_root"],
                 refresh_palace=refresh_palace,
@@ -1215,6 +1229,709 @@ def print_writing_recap(recap_data: dict):
     print(render_writing_recap(recap_data))
 
 
+def maintain_writing_sidecar(
+    vault_dir: str,
+    kind: str,
+    project: str | None = None,
+    out_dir: str = None,
+    codex_home: str = None,
+    config_path: str = None,
+    brainstorm_paths=None,
+    audit_paths=None,
+    discarded_paths=None,
+    palace_path: str = None,
+    runtime_root: str = None,
+    sync: str = "if-needed",
+    slug: str | None = None,
+    chapter: int | None = None,
+    notes: Sequence[str] | None = None,
+    write: bool = False,
+    n_results: int = 3,
+) -> dict:
+    if kind not in MAINTAIN_KINDS:
+        raise ValueError(f"Unknown writing maintain kind: {kind}")
+
+    prepared = prepare_writing_sidecar(
+        vault_dir=vault_dir,
+        project=project,
+        out_dir=out_dir,
+        codex_home=codex_home,
+        config_path=config_path,
+        brainstorm_paths=brainstorm_paths,
+        audit_paths=audit_paths,
+        discarded_paths=discarded_paths,
+        palace_path=palace_path,
+        runtime_root=runtime_root,
+        sync=sync,
+        refresh_palace=False,
+    )
+    status = prepared["status"]
+    project_root = Path(status["project_root"])
+    doc_bundle = _load_live_doc_bundle(project_root)
+    warnings = list(prepared["warnings"])
+    clean_notes = _clean_note_list(notes or [])
+    chapter_number = _resolve_chapter_number(project_root, doc_bundle, chapter)
+    if chapter_number is None:
+        raise ValueError(
+            "Could not infer a chapter number for sidecar maintenance. Pass --chapter <n>."
+        )
+
+    artifacts = _build_maintenance_artifacts(
+        kind=kind,
+        status=status,
+        doc_bundle=doc_bundle,
+        notes=clean_notes,
+        slug=slug,
+        chapter_number=chapter_number,
+        n_results=n_results,
+        warnings=warnings,
+    )
+
+    paths_written: list[str] = []
+    sync_performed = False
+    sync_summary = prepared["sync_summary"]
+
+    if write:
+        for artifact in artifacts:
+            artifact_path = Path(artifact["path"])
+            _ensure_dir(artifact_path.parent)
+            artifact_path.write_text(artifact["content"], encoding="utf-8")
+            paths_written.append(str(artifact_path))
+
+        if sync != "never":
+            post = prepare_writing_sidecar(
+                vault_dir=vault_dir,
+                project=project,
+                out_dir=out_dir,
+                codex_home=codex_home,
+                config_path=config_path,
+                brainstorm_paths=brainstorm_paths,
+                audit_paths=audit_paths,
+                discarded_paths=discarded_paths,
+                palace_path=palace_path,
+                runtime_root=runtime_root,
+                sync=sync,
+                refresh_palace=False,
+            )
+            status = post["status"]
+            sync_summary = post["sync_summary"]
+            sync_performed = post["synced"]
+            warnings.extend(post["warnings"])
+        else:
+            status = get_writing_sidecar_status(
+                vault_dir=vault_dir,
+                project=project,
+                out_dir=out_dir,
+                codex_home=codex_home,
+                config_path=config_path,
+                brainstorm_paths=brainstorm_paths,
+                audit_paths=audit_paths,
+                discarded_paths=discarded_paths,
+                palace_path=palace_path,
+                runtime_root=runtime_root,
+            )
+
+    source_inputs = _summarize_maintenance_sources(doc_bundle, artifacts, clean_notes)
+
+    return {
+        "project": status["project"],
+        "project_root": status["project_root"],
+        "vault_root": status["vault_root"],
+        "kind": kind,
+        "mode": "write" if write else "preview",
+        "write_performed": write,
+        "paths_written": paths_written,
+        "sync_performed": sync_performed,
+        "sync_summary": sync_summary,
+        "state": status["state"],
+        "stale": status["stale"],
+        "reasons": status["stale_reasons"],
+        "last_synced_at": status["last_synced_at"],
+        "warnings": _unique_lines(warnings),
+        "source_inputs": source_inputs,
+        "generated_sections": {
+            artifact["kind"]: list(artifact["sections"].keys()) for artifact in artifacts
+        },
+        "artifacts": artifacts,
+    }
+
+
+def render_writing_maintenance(report: dict) -> str:
+    lines = [
+        "",
+        "=" * 60,
+        f"  Writing Sidecar Maintain ({report['kind']})",
+        "=" * 60,
+        f"  Project: {report['project_root']}",
+        f"  Mode:    {report['mode'].upper()}",
+        f"  State:   {report['state'].upper()}",
+    ]
+    if report.get("last_synced_at"):
+        lines.append(f"  Synced:  {report['last_synced_at']}")
+    if report.get("warnings"):
+        lines.append("\n  Warnings:")
+        for warning in report["warnings"]:
+            lines.append(f"    - {warning}")
+    if report.get("paths_written"):
+        lines.append("\n  Paths written:")
+        for path in report["paths_written"]:
+            lines.append(f"    - {path}")
+
+    for artifact in report.get("artifacts", []):
+        lines.append(f"\n  [{artifact['kind']}] {artifact['path']}")
+        for title, items in artifact["sections"].items():
+            lines.append(f"    {title}:")
+            if not items:
+                lines.append("      - none")
+                continue
+            for item in items:
+                lines.append(f"      - {item}")
+    lines.extend(["", "=" * 60, ""])
+    return "\n".join(lines)
+
+
+def print_writing_maintenance(report: dict):
+    print(render_writing_maintenance(report))
+
+
+def _clean_note_list(notes: Sequence[str]) -> list[str]:
+    cleaned = []
+    for note in notes:
+        value = _clean_highlight_line(str(note or ""))
+        if value:
+            cleaned.append(value)
+    return _unique_lines(cleaned)
+
+
+def _resolve_chapter_number(
+    project_root: Path,
+    doc_bundle: dict,
+    chapter_override: int | None,
+) -> int | None:
+    if chapter_override is not None:
+        return int(chapter_override)
+
+    for value in (
+        _extract_field(doc_bundle, "chapter"),
+        _extract_field(doc_bundle, "status"),
+        _extract_field(doc_bundle, "next_action"),
+    ):
+        chapter_number = _extract_numeric_chapter(value)
+        if chapter_number is not None:
+            return chapter_number
+
+    scan_roots = [
+        project_root,
+        project_root / "_story_bible" / "chapters",
+        project_root / "logs" / "checkpoints",
+        project_root / "logs" / "brainstorms",
+        project_root / "logs" / "audits",
+        project_root / "logs" / "discarded_paths",
+    ]
+    chapter_numbers = set()
+    for root in scan_roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            number = _extract_numeric_chapter(path.name)
+            if number is not None:
+                chapter_numbers.add(number)
+    return max(chapter_numbers) if chapter_numbers else None
+
+
+def _extract_numeric_chapter(value: str | None) -> int | None:
+    if not value:
+        return None
+    match = re.search(r"(?:chapter[-\s_]*)?(\d+)", str(value), flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _build_maintenance_artifacts(
+    *,
+    kind: str,
+    status: dict,
+    doc_bundle: dict,
+    notes: list[str],
+    slug: str | None,
+    chapter_number: int,
+    n_results: int,
+    warnings: list[str],
+) -> list[dict]:
+    artifact_kinds = ["checkpoint", "audit", "handoff"]
+    if kind == "closeout":
+        if notes:
+            artifact_kinds.append("discarded")
+    else:
+        artifact_kinds = [kind]
+
+    return [
+        _build_single_maintenance_artifact(
+            artifact_kind=artifact_kind,
+            status=status,
+            doc_bundle=doc_bundle,
+            notes=notes,
+            slug=slug,
+            chapter_number=chapter_number,
+            n_results=n_results,
+            warnings=warnings,
+        )
+        for artifact_kind in artifact_kinds
+    ]
+
+
+def _build_single_maintenance_artifact(
+    *,
+    artifact_kind: str,
+    status: dict,
+    doc_bundle: dict,
+    notes: list[str],
+    slug: str | None,
+    chapter_number: int,
+    n_results: int,
+    warnings: list[str],
+) -> dict:
+    project_root = Path(status["project_root"])
+    project_name = status["project"]
+    date_stamp = datetime.now().astimezone().strftime("%Y-%m-%d")
+    phase = _extract_phase(doc_bundle)
+    current_status = _extract_field(doc_bundle, "status") or "TBD"
+    next_action = _extract_field(doc_bundle, "next_action") or "TBD"
+    working_title = _extract_field(doc_bundle, "working_title")
+
+    query_plan = _select_maintain_queries(doc_bundle, project_name, artifact_kind)
+    results = _run_sidecar_queries(
+        status,
+        query_plan,
+        n_results=n_results,
+        warnings=warnings,
+        curated_for_context=True,
+    )
+
+    if artifact_kind == "checkpoint":
+        chosen_slug = _artifact_slug(slug, fallback="session")
+        path = _resolve_artifact_path(
+            project_root / "logs" / "checkpoints",
+            f"*_chapter-{chapter_number}_*_checkpoint.md",
+            f"{date_stamp}_chapter-{chapter_number}_{chosen_slug}_checkpoint.md",
+        )
+        sections = _build_checkpoint_sections(doc_bundle, results, phase, notes)
+        title = "Session Checkpoint"
+        metadata = {
+            "Project": project_name,
+            "Chapter": f"{chapter_number}",
+            "Date": date_stamp,
+            "Context Mode": "startup",
+        }
+    elif artifact_kind == "audit":
+        path = _resolve_artifact_path(
+            project_root / "logs" / "audits",
+            f"*_chapter-{chapter_number}_closeout_audit.md",
+            f"{date_stamp}_chapter-{chapter_number}_closeout_audit.md",
+        )
+        sections = _build_audit_sections(doc_bundle, results, notes)
+        title = "Chapter Closeout Audit"
+        metadata = {
+            "Project": project_name,
+            "Chapter": f"{chapter_number}",
+            "Title": working_title or "",
+            "Date": date_stamp,
+        }
+    elif artifact_kind == "handoff":
+        next_chapter = chapter_number + 1
+        chosen_slug = _artifact_slug(
+            slug or working_title or next_action,
+            fallback="handoff",
+        )
+        path = _resolve_artifact_path(
+            project_root / "logs" / "brainstorms",
+            f"*_chapter-{next_chapter}_*_handoff.md",
+            f"{date_stamp}_chapter-{next_chapter}_{chosen_slug}_handoff.md",
+        )
+        sections = _build_handoff_sections(doc_bundle, results, notes)
+        title = "Chapter Handoff"
+        metadata = {
+            "Project": project_name,
+            "Date": date_stamp,
+            "Next Chapter": f"{next_chapter}",
+        }
+    else:
+        chosen_slug = _artifact_slug(slug or next_action, fallback="discarded")
+        discarded_support = _unique_lines(
+            notes
+            + _collect_keyword_evidence(
+                doc_bundle,
+                ("current_chapter_notes", "current_notes"),
+                section_keywords=("open work", "chapter goals", "final checklist", "audit log"),
+                keywords=("risk", "problem", "watch", "failed", "cut", "repeat", "avoid", "rejected"),
+                max_items=5,
+            )
+            + _extract_rejected_path_evidence(results, max_items=4)
+        )
+        if not discarded_support:
+            raise ValueError(
+                "Discarded-path maintenance needs --note text or existing rejected-path evidence."
+            )
+        path = _resolve_artifact_path(
+            project_root / "logs" / "discarded_paths",
+            f"*_chapter-{chapter_number}_*_discarded.md",
+            f"{date_stamp}_chapter-{chapter_number}_{chosen_slug}_discarded.md",
+        )
+        sections = _build_discarded_sections(doc_bundle, results, notes)
+        title = "Discarded Path"
+        metadata = {
+            "Project": project_name,
+            "Chapter": f"{chapter_number}",
+            "Date": date_stamp,
+        }
+
+    content = _render_sidecar_artifact(title, metadata, sections)
+    return {
+        "kind": artifact_kind,
+        "path": str(path),
+        "title": title,
+        "sections": sections,
+        "content": content,
+        "queries_run": query_plan,
+        "results": results,
+    }
+
+
+def _select_maintain_queries(doc_bundle: dict, project: str, artifact_kind: str) -> list[dict]:
+    if artifact_kind == "checkpoint":
+        return _select_context_queries(doc_bundle, project, "startup")
+    if artifact_kind == "audit":
+        return [{"mode": "audit", "query": query} for query in _collect_mode_queries(doc_bundle, project, "audit")]
+    if artifact_kind == "handoff":
+        return _select_recap_queries(doc_bundle, project, "handoff")
+    return [
+        {
+            "mode": "audit",
+            "query": _pick_signal_query(
+                doc_bundle,
+                ("current_chapter_notes", "current_notes"),
+                section_keywords=("open work", "chapter goals", "final checklist", "audit log"),
+                field_names=("audit_status", "latest_score", "next_action"),
+                keywords=("risk", "problem", "watch", "failed", "cut", "repeat"),
+            )
+            or _fallback_query(project, "audit"),
+        },
+        {
+            "mode": "history",
+            "query": _pick_signal_query(
+                doc_bundle,
+                ("current_chapter_notes", "current_notes", "story_so_far"),
+                section_keywords=("threads carried forward", "locked decisions", "continuity closeout"),
+                field_names=("status", "next_action"),
+                keywords=("decision", "carry", "thread", "guardrail", "risk"),
+            )
+            or _fallback_query(project, "history"),
+        },
+    ]
+
+
+def _build_checkpoint_sections(doc_bundle: dict, results: list[dict], phase: str | None, notes: list[str]) -> dict:
+    session_state = _unique_lines(
+        _section_from_docs(
+            doc_bundle,
+            ("current_notes", "current_chapter_notes"),
+            field_names=("status", "phase", "arc", "chapter", "working_title", "next_action", "audit_status"),
+            max_items=6,
+        )
+    )
+    current_focus = _unique_lines(
+        _section_from_docs(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes"),
+            section_keywords=("current focus", "what is actually ready", "chapter goals", "next start point", "open work"),
+            max_items=5,
+        )
+    )
+    carry_forward = _unique_lines(
+        _section_from_docs(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes", "story_so_far"),
+            section_keywords=("threads carried forward", "locked decisions", "continuity closeout"),
+            keywords=("decision", "carry", "watch", "risk", "guardrail", "thread"),
+            max_items=4,
+        )
+        + _extract_story_memory_evidence(results, max_items=3)
+    )
+    return {
+        "Session State": session_state,
+        "Current Focus": current_focus,
+        "Carry-Forward Threads": carry_forward,
+        "Suggested Next Loadout": _derive_suggested_loadout(doc_bundle, phase),
+        "Assistant Notes": notes,
+        "Sources Used": _collect_artifact_sources(doc_bundle, results),
+    }
+
+
+def _build_audit_sections(doc_bundle: dict, results: list[dict], notes: list[str]) -> dict:
+    audit_status = _extract_field(doc_bundle, "audit_status") or "IN_PROGRESS"
+    latest_score = _extract_field(doc_bundle, "latest_score") or "TBD"
+    status_text = _extract_field(doc_bundle, "status") or "TBD"
+    next_action = _extract_field(doc_bundle, "next_action") or "Continue the audit/debug loop."
+    issue_lines = _unique_lines(
+        notes
+        + _section_from_docs(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes"),
+            section_keywords=("open work", "chapter goals", "final checklist", "audit log"),
+            keywords=("risk", "problem", "watch", "failed", "cut", "repeat"),
+            max_items=5,
+        )
+        + _extract_rejected_path_evidence(results, max_items=4)
+    )
+    carry_forward = _unique_lines(
+        _section_from_docs(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes", "story_so_far"),
+            section_keywords=("threads carried forward", "locked decisions", "continuity closeout"),
+            keywords=("carry", "thread", "decision", "obligation", "watch"),
+            max_items=5,
+        )
+        + _extract_story_memory_evidence(results, max_items=2)
+    )
+    return {
+        "Final Result": [
+            f"Final cold-audit score: {latest_score}",
+            f"Result: {audit_status}",
+            f"Status: {status_text}",
+            f"Next practical step: {next_action}",
+        ],
+        "Audit Progression": notes or ["No extra audit progression notes were recorded in this pass."],
+        "Main Problems That Had To Be Fixed": issue_lines,
+        "What The Final Version Does Better": _section_from_docs(
+            doc_bundle,
+            ("current_notes", "current_chapter_notes"),
+            section_keywords=("what is actually ready", "current focus"),
+            keywords=("clear", "strong", "ready", "works", "better"),
+            max_items=4,
+        ),
+        "Carry-Forward Threads Logged At Closeout": carry_forward,
+        "Residual Non-Blocking Issues": issue_lines[:3],
+        "Sources Used": _collect_artifact_sources(doc_bundle, results),
+    }
+
+
+def _build_handoff_sections(doc_bundle: dict, results: list[dict], notes: list[str]) -> dict:
+    starting_position = _unique_lines(
+        _section_from_docs(
+            doc_bundle,
+            ("current_notes", "current_chapter_notes"),
+            section_keywords=("current focus", "what is actually ready", "cdlc status", "current phase"),
+            field_names=("status", "phase", "arc", "chapter", "working_title"),
+            max_items=6,
+        )
+    )
+    opening_pressures = _unique_lines(
+        _section_from_docs(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes"),
+            section_keywords=("next start point", "chapter goals", "open work", "threads carried forward"),
+            keywords=("next", "pressure", "threat", "guard", "watch", "risk", "open"),
+            max_items=5,
+        )
+        + _extract_story_memory_evidence(results, max_items=3)
+    )
+    guardrails = _unique_lines(
+        notes
+        + _section_from_docs(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes"),
+            section_keywords=("open work", "chapter goals", "final checklist", "threads carried forward"),
+            keywords=("guardrail", "risk", "watch", "must", "avoid", "don't", "do not"),
+            max_items=5,
+        )
+        + _extract_rejected_path_evidence(results, max_items=3)
+    )
+    best_material = _unique_lines(
+        _section_from_docs(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes"),
+            section_keywords=("next start point", "current focus", "what is actually ready"),
+            max_items=5,
+        )
+        + _extract_story_memory_evidence(results, max_items=3)
+    )
+    return {
+        "Starting Position": starting_position,
+        "Core Opening Pressures": opening_pressures,
+        "Useful Scene Questions": notes,
+        "Guardrails": guardrails,
+        "Best Immediate Scene Material": best_material,
+        "Sources Used": _collect_artifact_sources(doc_bundle, results),
+    }
+
+
+def _build_discarded_sections(doc_bundle: dict, results: list[dict], notes: list[str]) -> dict:
+    rejected = _unique_lines(notes + _extract_rejected_path_evidence(results, max_items=4))
+    why_rejected = _unique_lines(
+        _collect_keyword_evidence(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes"),
+            section_keywords=("open work", "chapter goals", "final checklist", "audit log"),
+            keywords=("risk", "problem", "watch", "failed", "cut", "repeat", "avoid"),
+            max_items=5,
+        )
+        + _extract_rejected_path_evidence(results, max_items=4)
+    )
+    keep_instead = _unique_lines(
+        _section_from_docs(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes"),
+            section_keywords=("next start point", "threads carried forward", "locked decisions"),
+            keywords=("keep", "instead", "next", "carry", "decision", "thread"),
+            max_items=5,
+        )
+        + _extract_story_memory_evidence(results, max_items=2)
+    )
+    retrieval_terms = _derive_retrieval_terms(notes, results)
+    return {
+        "Rejected Version": rejected,
+        "Why It Was Rejected": why_rejected,
+        "Keep Instead": keep_instead,
+        "Retrieval Terms Worth Keeping": retrieval_terms,
+        "Sources Used": _collect_artifact_sources(doc_bundle, results),
+    }
+
+
+def _derive_retrieval_terms(notes: list[str], results: list[dict], max_items: int = 5) -> list[str]:
+    terms = []
+    seen = set()
+    for value in list(notes) + [packet.get("query", "") for packet in results]:
+        condensed = _condense_query(value)
+        normalized = _normalize_text(condensed)
+        if not condensed or normalized in seen:
+            continue
+        seen.add(normalized)
+        terms.append(condensed)
+        if len(terms) >= max_items:
+            return terms
+    return terms
+
+
+def _collect_artifact_sources(doc_bundle: dict, results: list[dict], max_items: int = 8) -> list[str]:
+    sources = []
+    seen = set()
+    for doc_name in ("current_notes", "current_chapter_notes", "story_so_far"):
+        payload = doc_bundle.get(doc_name, {})
+        if not payload.get("exists"):
+            continue
+        doc_path = Path(payload["path"])
+        project_root = doc_path.parents[1] if "_story_bible" in payload["path"] else doc_path.parent
+        entry = _normalize_project_source(payload["path"], project_root)
+        normalized = _normalize_text(entry)
+        if normalized not in seen:
+            seen.add(normalized)
+            sources.append(entry)
+    for packet in results:
+        for hit in packet.get("results", []):
+            source = f"sidecar:{hit.get('room', '?')}:{hit.get('source_file', '?')}"
+            normalized = _normalize_text(source)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            sources.append(source)
+            if len(sources) >= max_items:
+                return sources
+    return sources
+
+
+def _summarize_maintenance_sources(doc_bundle: dict, artifacts: list[dict], notes: list[str]) -> dict:
+    live_docs = {
+        name: payload["path"]
+        for name, payload in doc_bundle.items()
+        if payload.get("exists")
+    }
+    queries_run = []
+    query_seen = set()
+    result_sources = []
+    source_seen = set()
+    for artifact in artifacts:
+        for query in artifact.get("queries_run", []):
+            key = (query.get("mode"), query.get("query"))
+            if key in query_seen:
+                continue
+            query_seen.add(key)
+            queries_run.append(query)
+        for packet in artifact.get("results", []):
+            for hit in packet.get("results", []):
+                key = (hit.get("room"), hit.get("source_file"))
+                if key in source_seen:
+                    continue
+                source_seen.add(key)
+                result_sources.append({"room": hit.get("room"), "source_file": hit.get("source_file")})
+    return {
+        "live_docs": live_docs,
+        "notes": notes,
+        "queries_run": queries_run,
+        "sidecar_sources": result_sources,
+    }
+
+
+def _artifact_slug(value: str | None, fallback: str) -> str:
+    cleaned = _safe_name(_normalize_heading_key(value or fallback).replace(" ", "_"))
+    return cleaned or fallback
+
+
+def _resolve_artifact_path(directory: Path, glob_pattern: str, filename: str) -> Path:
+    if directory.exists():
+        matches = sorted(
+            directory.glob(glob_pattern),
+            key=lambda path: (path.stat().st_mtime, path.name),
+            reverse=True,
+        )
+        if matches:
+            return matches[0]
+    return directory / filename
+
+
+def _render_sidecar_artifact(title: str, metadata: dict[str, str], sections: dict[str, list[str]]) -> str:
+    lines = [f"# {title}", ""]
+    for label, value in metadata.items():
+        lines.append(f"{label}: {value}")
+    lines.append("")
+    for heading, items in sections.items():
+        lines.append(f"## {heading}")
+        lines.append("")
+        if not items:
+            lines.append("- none")
+        else:
+            for item in items:
+                lines.append(f"- {item}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _unique_lines(items: Sequence[str]) -> list[str]:
+    unique = []
+    seen = set()
+    for item in items:
+        cleaned = _clean_highlight_line(str(item or ""))
+        normalized = _normalize_text(cleaned)
+        if not cleaned or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(cleaned)
+    return unique
+
+
+def _normalize_project_source(path: str, project_root: Path) -> str:
+    try:
+        relative = Path(path).resolve().relative_to(project_root.resolve())
+        return str(relative).replace("\\", "/")
+    except Exception:
+        return str(path)
+
+
 def _load_live_doc_bundle(project_root: Path) -> dict:
     bundle = {}
     for name, relative_path in DOC_RELATIVE_PATHS.items():
@@ -1794,11 +2511,12 @@ def _curate_query_packet(packet: dict) -> dict:
 
     if packet.get("mode") == "history" and any(hit.get("room") != "chat_process" for hit in deduped):
         preferred_rooms = {
-            "audits": 0,
-            "brainstorms": 1,
-            "discarded_paths": 2,
-            "archived_notes": 3,
-            "chat_process": 4,
+            "checkpoints": 0,
+            "audits": 1,
+            "brainstorms": 2,
+            "discarded_paths": 3,
+            "archived_notes": 4,
+            "chat_process": 5,
         }
         deduped = [
             hit
@@ -1862,7 +2580,7 @@ def _collect_recent_artifacts(output_root: Path, limit: int = 5) -> list[dict]:
     if not output_root.exists():
         return []
     items = []
-    for room in ("brainstorms", "audits", "discarded_paths", "chat_process"):
+    for room in ("checkpoints", "brainstorms", "audits", "discarded_paths", "chat_process"):
         room_dir = output_root / room
         if not room_dir.exists():
             continue
@@ -2018,12 +2736,52 @@ def _section_from_docs(
     )
 
 
+def _collect_keyword_evidence(
+    doc_bundle: dict,
+    doc_order: Sequence[str],
+    *,
+    section_keywords: Sequence[str] = (),
+    field_names: Sequence[str] = (),
+    keywords: Sequence[str] = (),
+    max_items: int = 5,
+) -> list[str]:
+    items = []
+    seen = set()
+    lowered_keywords = tuple(keyword.lower() for keyword in keywords)
+    for candidate in _iter_signal_candidates(
+        doc_bundle,
+        doc_order,
+        section_keywords=section_keywords,
+        field_names=field_names,
+    ):
+        cleaned = _clean_highlight_line(candidate)
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered_keywords and not any(keyword in lowered for keyword in lowered_keywords):
+            continue
+        normalized = _normalize_text(cleaned)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        items.append(cleaned)
+        if len(items) >= max_items:
+            return items
+    return items
+
+
 def _extract_story_memory_evidence(results: list[dict], max_items: int = 3) -> list[str]:
     items = []
     seen = set()
     for packet in results:
         for hit in packet.get("results", []):
-            if hit.get("room") not in {"brainstorms", "audits", "discarded_paths", "chat_process"}:
+            if hit.get("room") not in {
+                "checkpoints",
+                "brainstorms",
+                "audits",
+                "discarded_paths",
+                "chat_process",
+            }:
                 continue
             summary = f"{hit.get('room')}: {_preview_text(hit.get('text', ''), max_words=14)}"
             normalized = _normalize_text(summary)
@@ -2071,6 +2829,7 @@ def scaffold_writing_sidecar(vault_dir: str, project: str, force: bool = False) 
 
     directories = [
         project_root / "logs",
+        project_root / "logs" / "checkpoints",
         project_root / "logs" / "audits",
         project_root / "logs" / "brainstorms",
         project_root / "logs" / "discarded_paths",
@@ -2086,6 +2845,7 @@ def scaffold_writing_sidecar(vault_dir: str, project: str, force: bool = False) 
     files = {
         project_root / "writing-sidecar.yaml": _default_writing_sidecar_config_text(),
         project_root / "logs" / "README.md": _default_logs_readme_text(project_root.name),
+        project_root / "logs" / "templates" / "checkpoint_snapshot.md": _default_checkpoint_template_text(),
         project_root / "logs" / "templates" / "audit_snapshot.md": _default_audit_template_text(),
         project_root / "logs" / "templates" / "chapter_handoff.md": _default_handoff_template_text(),
         project_root / "logs" / "templates" / "discarded_path.md": _default_discarded_template_text(),
@@ -2248,6 +3008,8 @@ def _copy_tree_if_present(
     for source_path in sorted(source_dir.rglob("*")):
         if not source_path.is_file():
             continue
+        if source_path.name.startswith("."):
+            continue
         if _should_skip_live_file(source_path, project_root):
             summary["skipped_live_files"].append(str(source_path))
             continue
@@ -2287,6 +3049,8 @@ def _copy_opt_in_paths(
             continue
 
         if source_path.is_file():
+            if source_path.name.startswith("."):
+                continue
             if _should_skip_live_file(source_path, project_root):
                 summary["skipped_live_files"].append(str(source_path))
                 continue
@@ -2310,6 +3074,8 @@ def _copy_opt_in_paths(
         export_root = room_dir if source_label == room_name else room_dir / source_label
         for nested_path in sorted(source_path.rglob("*")):
             if not nested_path.is_file():
+                continue
+            if nested_path.name.startswith("."):
                 continue
             if _should_skip_live_file(nested_path, project_root):
                 summary["skipped_live_files"].append(str(nested_path))
@@ -2633,7 +3399,8 @@ chat_exclude_terms:
   # Add tooling/admin phrases that should never attach a chat to the project.
   # - mempalace
 
-# Archived chapter notes from _story_bible/chapters are already ingested automatically.
+# Archived chapter notes from _story_bible/chapters and checkpoint logs from logs/checkpoints
+# are already ingested automatically.
 brainstorms: []
 audits: []
 discarded_paths: []
@@ -2646,6 +3413,7 @@ def _default_logs_readme_text(project_name: str) -> str:
 This folder stores sidecar-safe process memory for `{project_name}`.
 
 Use it for:
+- structured checkpoints
 - archived audits
 - brainstorm bundles
 - discarded scene paths or rejected structural options
@@ -2653,6 +3421,7 @@ Use it for:
 
 Workflow:
 - use `logs/templates/` when creating new sidecar artifacts
+- keep startup / planning / closeout snapshots in `logs/checkpoints/`
 - update these files during chapter closeout and handoff, not in live canon docs
 - run `writing-sidecar sync <vault> --project {project_name}` after meaningful log changes
 
@@ -2665,6 +3434,51 @@ Recommended vault `.gitignore` entries:
 - `.mempalace-sidecar-runtime/`
 - `.palaces/`
 - `.sidecars/`
+
+Naming rules:
+- checkpoints: `YYYY-MM-DD_chapter-<n>_<slug>_checkpoint.md`
+- audits: `YYYY-MM-DD_chapter-<n>_closeout_audit.md`
+- handoffs: `YYYY-MM-DD_chapter-<n+1>_<slug>_handoff.md`
+- discarded paths: `YYYY-MM-DD_chapter-<n>_<slug>_discarded.md`
+"""
+
+
+def _default_checkpoint_template_text() -> str:
+    return """# Session Checkpoint
+
+Project:
+Chapter:
+Date:
+Context Mode:
+
+## Session State
+
+- Phase:
+- Status:
+- Next Action:
+
+## Current Focus
+
+- 
+- 
+
+## Carry-Forward Threads
+
+- 
+- 
+
+## Suggested Next Loadout
+
+- 
+- 
+
+## Assistant Notes
+
+- 
+
+## Sources Used
+
+- 
 """
 
 

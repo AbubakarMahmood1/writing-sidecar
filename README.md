@@ -44,6 +44,7 @@ writing-sidecar export <vault-or-project> --project Witcher-DC
 writing-sidecar context <vault-or-project> --project Witcher-DC
 writing-sidecar search <vault-or-project> --project Witcher-DC --query "Arthur sponsorship"
 writing-sidecar recap <vault-or-project> --project Witcher-DC --mode restart
+writing-sidecar maintain <vault-or-project> --project Witcher-DC --kind checkpoint --write
 writing-sidecar sync <vault-or-project> --project Witcher-DC --query "Arthur sponsorship"
 writing-sidecar doctor <vault-or-project> --project Witcher-DC
 writing-sidecar projects <vault>
@@ -77,6 +78,7 @@ Default project paths:
 Fixed rooms:
 
 - `chat_process`
+- `checkpoints`
 - `brainstorms`
 - `audits`
 - `discarded_paths`
@@ -116,8 +118,17 @@ Examples:
 ```bash
 writing-sidecar context C:/vault --project Witcher-DC --mode startup
 writing-sidecar recap C:/vault --project Witcher-DC --mode restart
+writing-sidecar maintain C:/vault --project Witcher-DC --kind checkpoint --write
 writing-sidecar projects C:/vault --format json
 ```
+
+Recommended Codex operating loop:
+
+1. `writing-sidecar context <vault-or-project> --project <name> --mode startup`
+2. `writing-sidecar maintain <vault-or-project> --project <name> --kind checkpoint --write`
+3. do the actual writing / planning / audit work
+4. use `search` only for narrower follow-up evidence
+5. before handoff or closeout, use `maintain --kind handoff|audit|closeout`
 
 ## JSON contract
 
@@ -138,6 +149,7 @@ Command-specific payload keys remain stable too:
 - `recap`: `mode`, `sections`, `queries_run`, `results`, `warnings`
 - `projects`: `count`, `projects`
 - `doctor`: `checks`, `ok`, `supported_spec`, `mempalace_version`
+- `maintain`: `kind`, `mode`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `source_inputs`, `generated_sections`
 
 ## Maintenance Rule
 

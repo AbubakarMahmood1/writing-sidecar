@@ -14,6 +14,7 @@ from writing_sidecar.workflow import (
     STATE_FILENAME,
     build_writing_context,
     build_writing_recap,
+    maintain_writing_sidecar,
     SEARCH_MODE_ROOMS,
     _ensure_dir,
     doctor_writing_sidecar,
@@ -117,6 +118,7 @@ def test_export_writing_corpus_writes_manifest_and_curates_rooms():
         write_file(project_root / "_story_bible" / "05_Current_Notes.md", "live notes")
         write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
         write_file(project_root / "_story_bible" / "chapters" / "1. Chill.md", "Archived note")
+        write_file(project_root / "logs" / "checkpoints" / ".gitkeep", "# placeholder")
 
         brainstorm_dir = tmp_path / "extras" / "brainstorms"
         write_file(brainstorm_dir / "angles.md", "Atlantis intake angles")
@@ -158,6 +160,7 @@ def test_export_writing_corpus_writes_manifest_and_curates_rooms():
         assert manifest["project_root"] == str(project_root.resolve())
         assert manifest["output_root"] == str(output_root.resolve())
         assert manifest["room_counts"]["chat_process"] == 1
+        assert manifest["room_counts"]["checkpoints"] == 0
         assert manifest["room_counts"]["research"] == 1
         assert manifest["room_counts"]["archived_notes"] == 1
         assert manifest["room_counts"]["brainstorms"] == 1
@@ -183,6 +186,32 @@ def test_export_writing_corpus_writes_manifest_and_curates_rooms():
         assert status["built"] is True
         assert status["stale"] is True
         assert any(item["reason"] == "palace_missing" for item in status["stale_reasons"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_export_writing_corpus_auto_resolves_project_name_from_project_dir():
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
+
+        summary = export_writing_corpus(
+            vault_dir=str(project_root),
+            project=None,
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+
+        manifest = json.loads((output_root / STATE_FILENAME).read_text(encoding="utf-8"))
+        assert summary["project_root"] == str(project_root.resolve())
+        assert manifest["project"] == "Witcher-DC"
+        assert (output_root / "mempalace.yaml").exists()
     finally:
         cleanup_temp_dir(tmp_path)
 
@@ -368,6 +397,14 @@ def test_writing_status_detects_input_changed_added_and_missing():
 )
 def test_writing_search_modes_preserve_room_priority(mode, expected_rooms, monkeypatch):
     search_data = {
+        "checkpoints": [
+            {
+                "room": "checkpoints",
+                "source_file": "checkpoint.md",
+                "similarity": 0.86,
+                "text": "startup checkpoint on Arthur sponsorship",
+            }
+        ],
         "brainstorms": [
             {
                 "room": "brainstorms",
@@ -445,6 +482,8 @@ def test_scaffold_writing_sidecar_creates_files_and_respects_force():
         _ensure_dir(project_root)
 
         summary = scaffold_writing_sidecar(str(vault_root), "Witcher-DC")
+        assert str(project_root / "logs" / "checkpoints") in summary["created_dirs"]
+        assert str(project_root / "logs" / "templates" / "checkpoint_snapshot.md") in summary["created_files"]
         assert str(project_root / "logs" / "templates" / "audit_snapshot.md") in summary["created_files"]
         assert (project_root / "logs" / "templates" / "chapter_handoff.md").exists()
         assert (project_root / "logs" / "templates" / "discarded_path.md").exists()
@@ -1023,6 +1062,14 @@ def test_build_writing_context_returns_startup_packet(monkeypatch):
                             "text": "Arthur sponsorship of Ciri remains the carry-forward pressure",
                         }
                     ],
+                    "checkpoints": [
+                        {
+                            "room": "checkpoints",
+                            "source_file": "checkpoint.md",
+                            "similarity": 0.95,
+                            "text": "startup checkpoint keeps Atlantis intake pressure ahead of tooling chatter",
+                        }
+                    ],
                     "discarded_paths": [],
                     "chat_process": [
                         {
@@ -1063,9 +1110,10 @@ def test_build_writing_context_returns_startup_packet(monkeypatch):
             for item in context["queries_run"]
         )
         planning_sources = [hit["source_file"] for hit in context["results"][0]["results"]]
+        assert planning_sources[0] == "checkpoint.md"
         assert planning_sources.count("handoff.md") == 1
         history_rooms = [hit["room"] for hit in context["results"][1]["results"]]
-        assert history_rooms[0] == "audits"
+        assert history_rooms[0] == "checkpoints"
         assert context["results"]
         assert context["recent_artifacts"]
     finally:
@@ -1335,5 +1383,217 @@ def test_cli_json_output_for_status_context_projects_and_doctor(monkeypatch, cap
             cli.main(sys.argv[1:])
             parsed = json.loads(capsys.readouterr().out)
             assert key in parsed
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_maintain_checkpoint_preview_and_write(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(project_root / "Chapter 1.txt", "Active chapter prose")
+        write_file(project_root / "_story_bible" / "05_Current_Notes.md", "**Status:** READY FOR PLANNING\n**Next Action:** Build the next Atlantis checkpoint.\n")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            "**Phase:** COMPLETE\n**Chapter:** 1\n## NEXT START POINT\n- physician testing sphere\n",
+        )
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [
+                    {
+                        "room": kwargs["room"],
+                        "source_file": f"{kwargs['room']}.md",
+                        "similarity": 0.9,
+                        "text": f"{kwargs['query']} evidence from {kwargs['room']}",
+                    }
+                ],
+            },
+        )
+
+        preview = maintain_writing_sidecar(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            kind="checkpoint",
+            sync="never",
+            notes=["Lock the Atlantis planning spine."],
+            write=False,
+        )
+        assert preview["write_performed"] is False
+        assert preview["artifacts"][0]["kind"] == "checkpoint"
+        assert "Session State" in preview["artifacts"][0]["sections"]
+        assert not Path(preview["artifacts"][0]["path"]).exists()
+
+        written = maintain_writing_sidecar(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            kind="checkpoint",
+            sync="never",
+            notes=["Lock the Atlantis planning spine."],
+            write=True,
+        )
+        assert written["write_performed"] is True
+        assert len(written["paths_written"]) == 1
+        checkpoint_path = Path(written["paths_written"][0])
+        assert checkpoint_path.exists()
+        assert "Session Checkpoint" in checkpoint_path.read_text(encoding="utf-8")
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_maintain_discarded_requires_note_or_existing_evidence(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(project_root / "Chapter 1.txt", "Active chapter prose")
+        write_file(project_root / "_story_bible" / "05_Current_Notes.md", "**Status:** READY FOR PLANNING\n")
+        write_file(project_root / "_story_bible" / "05_Current_Chapter_Notes.md", "**Phase:** COMPLETE\n**Chapter:** 1\n")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {"query": kwargs["query"], "filters": {}, "results": []},
+        )
+
+        with pytest.raises(ValueError, match="Discarded-path maintenance needs"):
+            maintain_writing_sidecar(
+                vault_dir=str(vault_root),
+                project="Witcher-DC",
+                out_dir=str(output_root),
+                palace_path=str(palace_root),
+                kind="discarded",
+                sync="never",
+                write=False,
+            )
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_maintain_closeout_writes_multiple_artifacts_and_syncs(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+        runtime_root = tmp_path / "runtime"
+
+        write_file(
+            project_root / "writing-sidecar.yaml",
+            "brainstorms:\n  - logs/brainstorms\naudits:\n  - logs/audits\ndiscarded_paths:\n  - logs/discarded_paths\n",
+        )
+        write_file(project_root / "Chapter 1.txt", "Active chapter prose")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** CHAPTER 1 COMPLETE -> READY FOR CHAPTER 2 PLANNING\n**Next Action:** Build the Chapter 2 handoff.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                **Phase:** COMPLETE
+                **Chapter:** 1
+
+                ## THREADS CARRIED FORWARD
+
+                - Arthur sponsorship stays active.
+
+                ## NEXT START POINT
+
+                - physician testing sphere
+                """
+            ).strip(),
+        )
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [
+                    {
+                        "room": kwargs["room"],
+                        "source_file": f"{kwargs['room']}.md",
+                        "similarity": 0.93,
+                        "text": f"{kwargs['query']} evidence from {kwargs['room']}",
+                    }
+                ],
+            },
+        )
+        monkeypatch.setattr(
+            "writing_sidecar.workflow._mine_exported_sidecar",
+            lambda output_root, project, palace_path, runtime_root, refresh_palace=False: _ensure_dir(
+                Path(palace_path)
+            ),
+        )
+
+        report = maintain_writing_sidecar(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            kind="closeout",
+            sync="if-needed",
+            notes=["Rejected the balanced braid version."],
+            write=True,
+        )
+
+        written_names = {Path(path).name for path in report["paths_written"]}
+        assert report["write_performed"] is True
+        assert report["sync_performed"] is True
+        assert any(name.endswith("_checkpoint.md") for name in written_names)
+        assert any(name.endswith("_closeout_audit.md") for name in written_names)
+        assert any(name.endswith("_handoff.md") for name in written_names)
+        assert any(name.endswith("_discarded.md") for name in written_names)
+        status = get_writing_sidecar_status(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        assert status["stale"] is False
+        assert status["room_counts"]["checkpoints"] >= 1
     finally:
         cleanup_temp_dir(tmp_path)

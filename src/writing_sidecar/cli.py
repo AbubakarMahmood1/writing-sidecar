@@ -8,6 +8,7 @@ from pathlib import Path
 from .mempalace_adapter import MempalaceCompatibilityError, search as raw_search
 from .workflow import (
     CONTEXT_MODES,
+    MAINTAIN_KINDS,
     RECAP_MODES,
     SEARCH_MODE_ROOMS,
     _ensure_dir,
@@ -19,10 +20,12 @@ from .workflow import (
     export_writing_corpus,
     get_writing_sidecar_status,
     list_writing_projects,
+    maintain_writing_sidecar,
     print_doctor_report,
     print_export_summary,
     print_scaffold_summary,
     print_writing_context,
+    print_writing_maintenance,
     print_writing_projects,
     print_writing_recap,
     print_writing_search_results,
@@ -385,6 +388,33 @@ def cmd_projects(args):
     print_writing_projects(report)
 
 
+def cmd_maintain(args):
+    report = maintain_writing_sidecar(
+        vault_dir=args.dir,
+        kind=args.kind,
+        project=args.project,
+        out_dir=args.out,
+        codex_home=args.codex_home,
+        config_path=args.config,
+        brainstorm_paths=args.brainstorms,
+        audit_paths=args.audits,
+        discarded_paths=args.discarded_paths,
+        palace_path=args.sidecar_palace,
+        runtime_root=args.runtime_root,
+        sync=args.sync,
+        slug=args.slug,
+        chapter=args.chapter,
+        notes=args.note,
+        write=args.write,
+    )
+    if args.format == "json":
+        _emit_json(report)
+        return
+    if report.get("sync_performed") and report.get("sync_summary"):
+        print_export_summary(report["sync_summary"], dry_run=False)
+    print_writing_maintenance(report)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="writing-sidecar — standalone CDLC sidecar for MemPalace-backed process memory.",
@@ -501,6 +531,40 @@ def build_parser() -> argparse.ArgumentParser:
     p_projects.add_argument("dir", help="Vault root or a path inside one project")
     _add_format_arg(p_projects)
 
+    p_maintain = sub.add_parser("maintain", help="Preview or write deterministic sidecar artifacts")
+    _shared_project_args(p_maintain)
+    p_maintain.add_argument(
+        "--kind",
+        required=True,
+        choices=MAINTAIN_KINDS,
+        help="Artifact kind to preview or write",
+    )
+    p_maintain.add_argument(
+        "--sync",
+        choices=["always", "if-needed", "never"],
+        default="if-needed",
+        help="When to sync the sidecar before/after maintenance (default: if-needed)",
+    )
+    p_maintain.add_argument("--write", action="store_true", help="Actually write the generated artifact(s)")
+    p_maintain.add_argument(
+        "--note",
+        action="append",
+        default=[],
+        help="Additional assistant/human note to merge into the generated artifact; repeat as needed",
+    )
+    p_maintain.add_argument(
+        "--slug",
+        default=None,
+        help="Optional slug override for checkpoint, handoff, or discarded artifact filenames",
+    )
+    p_maintain.add_argument(
+        "--chapter",
+        type=int,
+        default=None,
+        help="Optional chapter number override when inference fails",
+    )
+    _add_format_arg(p_maintain)
+
     return parser
 
 
@@ -521,6 +585,7 @@ def main(argv=None):
         "context": cmd_context,
         "recap": cmd_recap,
         "projects": cmd_projects,
+        "maintain": cmd_maintain,
     }
 
     try:

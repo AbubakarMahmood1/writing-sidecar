@@ -12,6 +12,7 @@ Use the story bible for:
 Use the sidecar for:
 
 - archived AI chats
+- structured checkpoints
 - brainstorm bundles
 - audits and criticism
 - rejected structures
@@ -22,6 +23,7 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 ## Room meanings
 
 - `chat_process`: normalized AI conversations tied to the project
+- `checkpoints`: structured startup / planning / closeout snapshots
 - `brainstorms`: exploratory ideas and future-facing planning
 - `audits`: criticism, review passes, and diagnostic notes
 - `discarded_paths`: rejected structures, cut branches, and things not chosen
@@ -30,14 +32,15 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 
 ## Search modes
 
-- `planning`: `brainstorms` -> `discarded_paths` -> `audits` -> `chat_process`
-- `audit`: `audits` -> `discarded_paths` -> `chat_process` -> `archived_notes`
-- `history`: `chat_process` -> `audits` -> `brainstorms` -> `discarded_paths`
+- `planning`: `checkpoints` -> `brainstorms` -> `discarded_paths` -> `audits` -> `chat_process`
+- `audit`: `audits` -> `discarded_paths` -> `checkpoints` -> `chat_process` -> `archived_notes`
+- `history`: `checkpoints` -> `audits` -> `brainstorms` -> `discarded_paths` -> `chat_process`
 - `research`: `research` -> `archived_notes`
 
 ## Practical AI behavior
 
 - start with `writing-sidecar context --mode startup` when entering a sidecar-enabled project
+- after startup context, use `writing-sidecar maintain --kind checkpoint --write` when real work is about to begin
 - use `writing-sidecar status` when you only need raw health / staleness
 - if stale and the task needs process memory, run `writing-sidecar sync`
 - use `writing-sidecar search --mode planning` only when `context` did not give enough planning signal
@@ -47,6 +50,10 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 - use `writing-sidecar recap --mode restart` after a long break
 - use `writing-sidecar recap --mode handoff` before handing work to another assistant or another session
 - use `writing-sidecar recap --mode continuity` when the main risk is drift, obligations, or timeline confusion
+- after planning progress, refresh sidecar-safe memory with `writing-sidecar maintain --kind checkpoint --write --note "..."`
+- after audit/debug findings, use `writing-sidecar maintain --kind audit --write` and `--kind discarded --write --note "..."` when a rejected path is clear
+- before handing off, use `writing-sidecar maintain --kind handoff --write`
+- on chapter closeout, use `writing-sidecar maintain --kind closeout --write`
 
 ## Startup-first flow
 
@@ -54,8 +61,9 @@ Recommended order:
 
 1. `writing-sidecar doctor <vault-or-project> --project <name>`
 2. `writing-sidecar context <vault-or-project> --project <name> --mode startup`
-3. `writing-sidecar search ...` only if you need narrower follow-up evidence
-4. `writing-sidecar recap ...` only when you are recovering from a break, doing a handoff, or checking continuity risk
+3. `writing-sidecar maintain <vault-or-project> --project <name> --kind checkpoint --write`
+4. `writing-sidecar search ...` only if you need narrower follow-up evidence
+5. `writing-sidecar recap ...` only when you are recovering from a break, doing a handoff, or checking continuity risk
 
 ## JSON output
 
@@ -66,3 +74,4 @@ If another tool or assistant layer needs machine-readable output, use `--format 
 - `recap`
 - `projects`
 - `doctor`
+- `maintain`

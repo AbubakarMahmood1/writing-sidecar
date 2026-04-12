@@ -29,7 +29,9 @@ The standalone CLI replaces the fork-only `mempalace writing-*` commands.
 - MemPalace is treated as a pinned engine dependency instead of the home of writing logic
 - after parity, the fork should stop being the feature-development home for writing-sidecar behavior
 - v2 adds `writing-sidecar context`, `writing-sidecar recap`, and `writing-sidecar projects`
+- v3 adds `writing-sidecar maintain` and the `checkpoints` room
 - startup no longer needs to be a manual `status` + `search` ritual unless you want lower-level control
+- sidecar-safe writeback is now explicit and preview-first instead of being a doc-only habit
 - JSON output is now stable enough for assistant glue through `--format json`
 
 ## Recommended transition
@@ -38,13 +40,15 @@ The standalone CLI replaces the fork-only `mempalace writing-*` commands.
 2. Install `writing-sidecar`.
 3. Run `writing-sidecar doctor <vault> --project <name>`.
 4. Run `writing-sidecar context <vault> --project <name> --mode startup`.
-5. Use `writing-sidecar search ...` only for targeted follow-up retrieval.
-6. Switch automation, docs, and habits from `mempalace writing-*` to `writing-sidecar *`.
+5. When actual work begins, run `writing-sidecar maintain <vault> --project <name> --kind checkpoint --write`.
+6. Use `writing-sidecar search ...` only for targeted follow-up retrieval.
+7. Switch automation, docs, and habits from `mempalace writing-*` to `writing-sidecar *`.
 
 Examples:
 
 ```bash
 writing-sidecar context C:/vault --project Witcher-DC --mode startup
 writing-sidecar recap C:/vault --project Witcher-DC --mode restart
+writing-sidecar maintain C:/vault --project Witcher-DC --kind closeout --write
 writing-sidecar projects C:/vault --format json
 ```
