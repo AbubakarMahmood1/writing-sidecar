@@ -19,7 +19,7 @@ import hashlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import yaml
 
@@ -45,6 +45,8 @@ SEARCH_MODE_ROOMS = {
     "history": ("chat_process", "audits", "brainstorms", "discarded_paths"),
     "research": ("research", "archived_notes"),
 }
+CONTEXT_MODES = ("startup", "planning", "audit", "history", "research")
+RECAP_MODES = ("restart", "handoff", "continuity")
 FIXED_ROOMS = (
     "chat_process",
     "brainstorms",
@@ -63,19 +65,161 @@ ROOM_DESCRIPTIONS = {
     "research": "Reference material and research notes safe to archive.",
     "archived_notes": "Archived chapter notes and historical planning material.",
 }
+DOC_RELATIVE_PATHS = {
+    "story_so_far": Path("_story_bible") / "01_Story_So_Far.md",
+    "current_notes": Path("_story_bible") / "05_Current_Notes.md",
+    "current_chapter_notes": Path("_story_bible") / "05_Current_Chapter_Notes.md",
+}
+PHASE_LOADOUT = {
+    "BRAINDUMP": [
+        "_story_bible/05_Current_Notes.md",
+        "_story_bible/05_Current_Chapter_Notes.md",
+        "_story_bible/04_Ideas_and_Future.md",
+    ],
+    "SCRIPTING": [
+        "_story_bible/02B_Character_Quick_Reference.md",
+        "_story_bible/04_Ideas_and_Future.md",
+        "_story_bible/05_Current_Chapter_Notes.md",
+    ],
+    "STAGING": [
+        "_story_bible/02B_Character_Quick_Reference.md",
+        "_story_bible/02C_Character_State_Tracker.md",
+        "_story_bible/03_World_Rules.md",
+        "_story_bible/05_Current_Chapter_Notes.md",
+    ],
+    "PROSE": [
+        "_story_bible/00_AI_Writing_Rules.md",
+        "_story_bible/02B_Character_Quick_Reference.md",
+        "_story_bible/05_Current_Chapter_Notes.md",
+    ],
+    "AUDIT": [
+        "_story_bible/96_Prose_Audit_Protocol.md",
+        "_story_bible/97_Editorial_Standards.md",
+        "current chapter prose",
+    ],
+    "DEBUG": [
+        "latest audit output",
+        "current chapter prose",
+        "only the rules needed for the dominant failure",
+    ],
+    "COMPLETE": [
+        "logs/audits/",
+        "logs/brainstorms/",
+        "logs/discarded_paths/",
+        "writing-sidecar sync",
+    ],
+}
+PROJECT_SCAN_PRUNE_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".sidecars",
+    ".palaces",
+    ".mempalace-sidecar-runtime",
+    ".pytest_cache",
+    ".tmp-tests",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+}
+FIELD_LABELS = {
+    "status": ("Status",),
+    "phase": ("Phase",),
+    "chapter": ("Current Chapter", "Chapter"),
+    "arc": ("Current Arc", "Arc"),
+    "working_title": ("Working Title",),
+    "next_action": ("Next Action",),
+    "audit_status": ("Audit Status",),
+    "latest_score": ("Latest Score",),
+}
+STRUCTURED_HIGHLIGHT_FIELDS = (
+    "status",
+    "phase",
+    "arc",
+    "chapter",
+    "working_title",
+    "audit_status",
+    "latest_score",
+    "next_action",
+)
+PREFERRED_SECTION_KEYWORDS = (
+    "current focus",
+    "recommended next loadout",
+    "next action",
+    "threads carried forward",
+    "continuity closeout",
+    "next start point",
+    "chapter goals",
+    "what is actually ready",
+    "open work",
+    "locked decisions",
+)
+LOW_VALUE_LINE_PREFIXES = (
+    "purpose:",
+    "last updated:",
+    "sources used",
+    "source:",
+)
+LOW_VALUE_LINE_SUBSTRINGS = (
+    "template-only",
+    "check this before planning or drafting",
+    "live scratchpad for the current writing session",
+)
+QUERY_STOP_LEADS = {
+    "open",
+    "start",
+    "continue",
+    "reset",
+    "run",
+    "use",
+    "check",
+    "review",
+    "build",
+    "move",
+}
+DOC_SECTION_HINTS = {
+    "startup_where": (
+        "what is actually ready",
+        "current focus",
+        "current phase",
+        "cdlc status",
+    ),
+    "startup_memory": (
+        "locked decisions",
+        "threads carried forward",
+        "continuity closeout",
+        "next start point",
+    ),
+    "handoff_state": ("current focus", "what is actually ready", "cdlc status"),
+    "handoff_risks": ("open work", "chapter goals", "threads carried forward"),
+    "continuity_facts": ("continuity closeout", "threads carried forward"),
+}
 
 
 def resolve_project_root(vault_dir: str, project: str) -> Path:
     """Resolve a project path from either a vault root or a direct project path."""
     base_path = Path(vault_dir).expanduser().resolve()
+    if base_path.is_file():
+        base_path = base_path.parent
     if not base_path.exists():
         raise FileNotFoundError(f"Vault path not found: {base_path}")
 
     direct_match = base_path.name.lower() == project.lower()
     candidate = base_path / project
+    ancestor_match = next(
+        (
+            ancestor
+            for ancestor in (base_path, *base_path.parents)
+            if ancestor.name.lower() == project.lower() and ancestor.is_dir()
+        ),
+        None,
+    )
 
     if direct_match and base_path.is_dir():
         return base_path
+    if ancestor_match is not None:
+        return ancestor_match.resolve()
     if candidate.is_dir():
         return candidate.resolve()
 
@@ -83,6 +227,114 @@ def resolve_project_root(vault_dir: str, project: str) -> Path:
         f"Could not resolve project '{project}' from {base_path}. "
         "Pass the vault root or the project directory itself."
     )
+
+
+def _find_project_config_path(project_root: Path) -> Path | None:
+    for filename in DEFAULT_WRITING_CONFIG_FILENAMES:
+        candidate = project_root / filename
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def _candidate_project(project_root: Path) -> dict:
+    project_root = project_root.expanduser().resolve()
+    return {
+        "project": project_root.name,
+        "project_root": project_root,
+        "config_path": _find_project_config_path(project_root),
+    }
+
+
+def find_enclosing_sidecar_project(path: str | Path) -> dict | None:
+    base_path = Path(path).expanduser().resolve()
+    if base_path.is_file():
+        base_path = base_path.parent
+    for ancestor in (base_path, *base_path.parents):
+        config_path = _find_project_config_path(ancestor)
+        if config_path:
+            return {
+                "project": ancestor.name,
+                "project_root": ancestor.resolve(),
+                "config_path": config_path,
+            }
+    return None
+
+
+def discover_sidecar_projects(vault_dir: str | Path) -> list[dict]:
+    base_path = Path(vault_dir).expanduser().resolve()
+    if base_path.is_file():
+        base_path = base_path.parent
+
+    enclosing = find_enclosing_sidecar_project(base_path)
+    if enclosing:
+        return [enclosing]
+
+    discovered: dict[str, dict] = {}
+    for root, dirnames, filenames in os.walk(base_path):
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if dirname not in PROJECT_SCAN_PRUNE_DIRS
+        ]
+        config_name = next(
+            (filename for filename in DEFAULT_WRITING_CONFIG_FILENAMES if filename in filenames),
+            None,
+        )
+        if not config_name:
+            continue
+        project_root = Path(root).resolve()
+        discovered[str(project_root)] = {
+            "project": project_root.name,
+            "project_root": project_root,
+            "config_path": (project_root / config_name).resolve(),
+        }
+    return [discovered[key] for key in sorted(discovered)]
+
+
+def resolve_sidecar_project(vault_dir: str, project: str | None = None) -> dict:
+    base_path = Path(vault_dir).expanduser().resolve()
+    if base_path.is_file():
+        base_path = base_path.parent
+    if project:
+        project_root = resolve_project_root(str(base_path), project)
+        return {
+            "project": project_root.name,
+            "project_root": project_root,
+            "vault_root": resolve_vault_root(str(base_path), project_root),
+            "config_path": _find_project_config_path(project_root),
+        }
+
+    enclosing = find_enclosing_sidecar_project(base_path)
+    if enclosing:
+        project_root = enclosing["project_root"]
+        return {
+            "project": enclosing["project"],
+            "project_root": project_root,
+            "vault_root": resolve_vault_root(str(base_path), project_root),
+            "config_path": enclosing["config_path"],
+        }
+
+    candidates = discover_sidecar_projects(base_path)
+    if not candidates:
+        raise FileNotFoundError(
+            f"Could not auto-resolve a sidecar-enabled project from {base_path}. "
+            "Pass --project explicitly or run writing-sidecar init first."
+        )
+    if len(candidates) > 1:
+        choices = ", ".join(candidate["project"] for candidate in candidates)
+        raise ValueError(
+            f"Ambiguous sidecar project under {base_path}. "
+            f"Pass --project explicitly. Candidates: {choices}"
+        )
+
+    project_root = candidates[0]["project_root"]
+    return {
+        "project": candidates[0]["project"],
+        "project_root": project_root,
+        "vault_root": resolve_vault_root(str(base_path), project_root),
+        "config_path": candidates[0]["config_path"],
+    }
 
 
 def default_output_dir(vault_root: Path, project: str) -> Path:
@@ -102,7 +354,7 @@ def default_runtime_dir(vault_root: Path, project: str) -> Path:
 
 def _prepare_writing_context(
     vault_dir: str,
-    project: str,
+    project: str | None,
     out_dir: str = None,
     codex_home: str = None,
     config_path: str = None,
@@ -112,28 +364,30 @@ def _prepare_writing_context(
     palace_path: str = None,
     runtime_root: str = None,
 ) -> dict:
-    project_root = resolve_project_root(vault_dir, project)
-    vault_root = resolve_vault_root(vault_dir, project_root)
+    resolved_project = resolve_sidecar_project(vault_dir, project)
+    project_name = resolved_project["project"]
+    project_root = resolved_project["project_root"]
+    vault_root = resolved_project["vault_root"]
     output_root = (
         Path(out_dir).expanduser().resolve()
         if out_dir
-        else default_output_dir(vault_root, project).resolve()
+        else default_output_dir(vault_root, project_name).resolve()
     )
     codex_root = Path(codex_home).expanduser().resolve() if codex_home else DEFAULT_CODEX_HOME
     target_palace = (
         Path(palace_path).expanduser().resolve()
         if palace_path
-        else default_palace_dir(vault_root, project).resolve()
+        else default_palace_dir(vault_root, project_name).resolve()
     )
     sidecar_runtime_root = (
         Path(runtime_root).expanduser().resolve()
         if runtime_root
-        else default_runtime_dir(vault_root, project).resolve()
+        else default_runtime_dir(vault_root, project_name).resolve()
     )
     writing_config, loaded_config_path = _load_writing_export_config(project_root, config_path)
     config_base_dir = loaded_config_path.parent if loaded_config_path else project_root
     project_terms = _build_project_terms(
-        project,
+        project_name,
         project_root,
         writing_config.get("chat_project_terms", []),
     )
@@ -155,7 +409,7 @@ def _prepare_writing_context(
     )
 
     return {
-        "project": project,
+        "project": project_name,
         "project_root": project_root,
         "vault_root": vault_root,
         "output_root": output_root,
@@ -194,6 +448,12 @@ def _new_export_summary(context: dict) -> dict:
         "stale": None,
         "stale_reasons": [],
     }
+
+
+def _status_state(built: bool, stale: bool) -> str:
+    if not built:
+        return "not_built"
+    return "stale" if stale else "clean"
 
 
 def _collect_writing_entries(context: dict, summary: dict, dry_run: bool) -> list:
@@ -266,7 +526,7 @@ def _collect_writing_entries(context: dict, summary: dict, dry_run: bool) -> lis
 
 def export_writing_corpus(
     vault_dir: str,
-    project: str,
+    project: str | None = None,
     out_dir: str = None,
     codex_home: str = None,
     config_path: str = None,
@@ -366,7 +626,7 @@ def print_export_summary(summary: dict, dry_run: bool = False):
 
 def get_writing_sidecar_status(
     vault_dir: str,
-    project: str,
+    project: str | None = None,
     out_dir: str = None,
     codex_home: str = None,
     config_path: str = None,
@@ -393,7 +653,7 @@ def get_writing_sidecar_status(
     current_entries = _collect_writing_entries(context, summary, dry_run=True)
     manifest = _load_state_manifest(context["manifest_path"])
     status = {
-        "project": project,
+        "project": context["project"],
         "project_root": str(context["project_root"]),
         "vault_root": str(context["vault_root"]),
         "output_root": str(context["output_root"]),
@@ -405,13 +665,17 @@ def get_writing_sidecar_status(
         "last_synced_at": manifest.get("synced_at") if manifest else None,
         "built": manifest is not None,
         "stale": True,
+        "state": "not_built",
         "stale_reasons": [],
+        "reasons": [],
     }
 
     if manifest is None:
         status["stale_reasons"].append({"reason": "manifest_missing"})
         if not context["palace_path"].exists():
             status["stale_reasons"].append({"reason": "palace_missing"})
+        status["reasons"] = list(status["stale_reasons"])
+        status["state"] = _status_state(status["built"], True)
         return status
 
     if not context["palace_path"].exists():
@@ -442,7 +706,9 @@ def get_writing_sidecar_status(
     for source_path in sorted(set(current_inputs) - set(manifest_inputs)):
         status["stale_reasons"].append({"reason": "input_added", "source_path": source_path})
 
+    status["reasons"] = list(status["stale_reasons"])
     status["stale"] = bool(status["stale_reasons"])
+    status["state"] = _status_state(status["built"], status["stale"])
     return status
 
 
@@ -461,10 +727,12 @@ def print_writing_status(status: dict):
     if status.get("last_synced_at"):
         print(f"  Synced:  {status['last_synced_at']}")
 
-    if not status["built"]:
-        print("  Status:  NOT BUILT")
-    else:
-        print(f"  Status:  {'STALE' if status['stale'] else 'CLEAN'}")
+    state_label = {
+        "not_built": "NOT BUILT",
+        "stale": "STALE",
+        "clean": "CLEAN",
+    }.get(status.get("state"), "UNKNOWN")
+    print(f"  Status:  {state_label}")
 
     if status.get("room_counts"):
         print("\n  Room counts:")
@@ -483,12 +751,83 @@ def print_writing_status(status: dict):
     print(f"\n{'=' * 55}\n")
 
 
+def prepare_writing_sidecar(
+    vault_dir: str,
+    project: str | None = None,
+    out_dir: str = None,
+    codex_home: str = None,
+    config_path: str = None,
+    brainstorm_paths=None,
+    audit_paths=None,
+    discarded_paths=None,
+    palace_path: str = None,
+    runtime_root: str = None,
+    sync: str = "if-needed",
+    refresh_palace: bool = False,
+) -> dict:
+    status = get_writing_sidecar_status(
+        vault_dir=vault_dir,
+        project=project,
+        out_dir=out_dir,
+        codex_home=codex_home,
+        config_path=config_path,
+        brainstorm_paths=brainstorm_paths,
+        audit_paths=audit_paths,
+        discarded_paths=discarded_paths,
+        palace_path=palace_path,
+        runtime_root=runtime_root,
+    )
+    should_sync = refresh_palace or sync == "always" or (sync == "if-needed" and status["stale"])
+    summary = None
+    warnings = []
+
+    if should_sync:
+        summary = export_writing_corpus(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            mine_after_export=True,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            refresh_palace=refresh_palace,
+            dry_run=False,
+        )
+        status = get_writing_sidecar_status(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+        )
+    elif sync == "never" and status["stale"]:
+        warnings.append("sidecar is stale; skipping rebuild because --sync never was used.")
+
+    return {
+        "status": status,
+        "sync_summary": summary,
+        "synced": summary is not None,
+        "warnings": warnings,
+    }
+
+
 def search_writing_sidecar(query: str, palace_path: str, wing: str, mode: str, n_results: int = 5) -> dict:
     if mode not in SEARCH_MODE_ROOMS:
         raise ValueError(f"Unknown writing-search mode: {mode}")
 
-    merged = []
+    primary = []
+    deferred = []
     seen = set()
+    seen_sources = set()
     rooms = SEARCH_MODE_ROOMS[mode]
     for room in rooms:
         results = search_memories(
@@ -506,15 +845,14 @@ def search_writing_sidecar(query: str, palace_path: str, wing: str, mode: str, n
                 continue
             seen.add(key)
             hit["mode"] = mode
-            merged.append(hit)
-            if len(merged) >= n_results:
-                return {
-                    "query": query,
-                    "wing": wing,
-                    "mode": mode,
-                    "room_order": list(rooms),
-                    "results": merged,
-                }
+            source_key = hit.get("source_file") or f"{room}:{len(seen)}"
+            if source_key not in seen_sources:
+                seen_sources.add(source_key)
+                primary.append(hit)
+            else:
+                deferred.append(hit)
+
+    merged = (primary + deferred)[:n_results]
 
     return {
         "query": query,
@@ -551,6 +889,1177 @@ def print_writing_search_results(search_data: dict):
         print()
         print(f"  {'─' * 56}")
     print()
+
+
+def list_writing_projects(vault_dir: str) -> dict:
+    base_path = Path(vault_dir).expanduser().resolve()
+    if base_path.is_file():
+        base_path = base_path.parent
+
+    projects = []
+    for candidate in discover_sidecar_projects(base_path):
+        status = get_writing_sidecar_status(
+            vault_dir=str(candidate["project_root"]),
+            project=candidate["project"],
+        )
+        projects.append(
+            {
+                "project": status["project"],
+                "project_root": status["project_root"],
+                "config_path": str(candidate["config_path"]) if candidate["config_path"] else None,
+                "state": status["state"],
+                "stale": status["stale"],
+                "last_synced_at": status["last_synced_at"],
+                "room_counts": status.get("room_counts", {}),
+                "reasons": status.get("stale_reasons", []),
+            }
+        )
+
+    return {
+        "vault_root": str(base_path),
+        "count": len(projects),
+        "projects": projects,
+    }
+
+
+def print_writing_projects(report: dict):
+    print(f"\n{'=' * 60}")
+    print("  Writing Sidecar Projects")
+    print(f"{'=' * 60}")
+    print(f"  Vault: {report['vault_root']}")
+    print(f"  Count: {report['count']}")
+    if not report["projects"]:
+        print("\n  No sidecar-enabled projects found.\n")
+        print(f"{'=' * 60}\n")
+        return
+
+    for item in report["projects"]:
+        print(f"\n  {item['project']} [{item['state'].upper()}]")
+        print(f"    Root:   {item['project_root']}")
+        print(f"    Config: {item['config_path']}")
+        if item.get("last_synced_at"):
+            print(f"    Synced: {item['last_synced_at']}")
+        if item.get("reasons"):
+            print("    Reasons:")
+            for reason in item["reasons"]:
+                if reason.get("source_path"):
+                    print(f"      - {reason['reason']}: {reason['source_path']}")
+                else:
+                    print(f"      - {reason['reason']}")
+    print(f"\n{'=' * 60}\n")
+
+
+def build_writing_context(
+    vault_dir: str,
+    project: str | None = None,
+    out_dir: str = None,
+    codex_home: str = None,
+    config_path: str = None,
+    brainstorm_paths=None,
+    audit_paths=None,
+    discarded_paths=None,
+    palace_path: str = None,
+    runtime_root: str = None,
+    sync: str = "if-needed",
+    refresh_palace: bool = False,
+    mode: str = "startup",
+    n_results: int = 3,
+) -> dict:
+    if mode not in CONTEXT_MODES:
+        raise ValueError(f"Unknown writing context mode: {mode}")
+
+    prepared = prepare_writing_sidecar(
+        vault_dir=vault_dir,
+        project=project,
+        out_dir=out_dir,
+        codex_home=codex_home,
+        config_path=config_path,
+        brainstorm_paths=brainstorm_paths,
+        audit_paths=audit_paths,
+        discarded_paths=discarded_paths,
+        palace_path=palace_path,
+        runtime_root=runtime_root,
+        sync=sync,
+        refresh_palace=refresh_palace,
+    )
+    status = prepared["status"]
+    doc_bundle = _load_live_doc_bundle(Path(status["project_root"]))
+    query_plan = _select_context_queries(doc_bundle, status["project"], mode)
+    warnings = list(prepared["warnings"])
+    results = _run_sidecar_queries(
+        status,
+        query_plan,
+        n_results=n_results,
+        warnings=warnings,
+        curated_for_context=True,
+    )
+    phase = _extract_phase(doc_bundle)
+
+    return {
+        "project": status["project"],
+        "project_root": status["project_root"],
+        "vault_root": status["vault_root"],
+        "mode": mode,
+        "synced": prepared["synced"],
+        "sync_summary": prepared["sync_summary"],
+        "state": status["state"],
+        "stale": status["stale"],
+        "reasons": status["stale_reasons"],
+        "last_synced_at": status["last_synced_at"],
+        "phase": phase,
+        "current_chapter": _extract_field(doc_bundle, "chapter"),
+        "current_arc": _extract_field(doc_bundle, "arc"),
+        "suggested_loadout": _derive_suggested_loadout(doc_bundle, phase),
+        "queries_run": query_plan,
+        "results": results,
+        "warnings": warnings,
+        "recent_artifacts": _collect_recent_artifacts(Path(status["output_root"])),
+        "doc_highlights": {
+            name: {
+                "path": payload["path"],
+                "highlights": payload["highlights"],
+            }
+            for name, payload in doc_bundle.items()
+            if payload["exists"]
+        },
+        "source_priority": ["live_docs", "sidecar"],
+    }
+
+
+def render_writing_context(context_data: dict) -> str:
+    lines = [
+        "",
+        "=" * 60,
+        "  Writing Sidecar Context",
+        "=" * 60,
+        f"  Project: {context_data['project_root']}",
+        f"  Mode:    {context_data['mode']}",
+        f"  State:   {context_data['state'].upper()}",
+    ]
+    if context_data.get("phase"):
+        lines.append(f"  Phase:   {context_data['phase']}")
+    if context_data.get("current_chapter"):
+        lines.append(f"  Chapter: {context_data['current_chapter']}")
+    if context_data.get("current_arc"):
+        lines.append(f"  Arc:     {context_data['current_arc']}")
+    if context_data.get("last_synced_at"):
+        lines.append(f"  Synced:  {context_data['last_synced_at']}")
+
+    if context_data.get("warnings"):
+        lines.append("\n  Warnings:")
+        for warning in context_data["warnings"]:
+            lines.append(f"    - {warning}")
+
+    lines.append("\n  Live doc highlights:")
+    for doc_name in ("current_notes", "current_chapter_notes", "story_so_far"):
+        payload = context_data["doc_highlights"].get(doc_name)
+        if not payload:
+            continue
+        lines.append(f"    {doc_name}:")
+        for item in payload["highlights"][:4]:
+            lines.append(f"      - {item}")
+
+    if context_data.get("suggested_loadout"):
+        lines.append("\n  Suggested loadout:")
+        for item in context_data["suggested_loadout"]:
+            lines.append(f"    - {item}")
+
+    if context_data.get("recent_artifacts"):
+        lines.append("\n  Recent sidecar artifacts:")
+        for item in context_data["recent_artifacts"][:4]:
+            lines.append(f"    - {item['room']}: {item['path']}")
+
+    if context_data.get("results"):
+        lines.append("\n  Sidecar evidence:")
+        for packet in context_data["results"]:
+            lines.append(f'    {packet["mode"]} -> "{packet["query"]}"')
+            if not packet.get("results"):
+                lines.append("      - no hits")
+                continue
+            for hit in packet["results"][:3]:
+                lines.append(
+                    f"      - {hit.get('room', '?')}: {hit.get('source_file', '?')} :: {_preview_text(hit.get('text', ''))}"
+                )
+    else:
+        lines.append("\n  Sidecar evidence:")
+        lines.append("    - no context hits were available")
+
+    lines.extend(["", "=" * 60, ""])
+    return "\n".join(lines)
+
+
+def print_writing_context(context_data: dict):
+    print(render_writing_context(context_data))
+
+
+def build_writing_recap(
+    vault_dir: str,
+    project: str | None = None,
+    out_dir: str = None,
+    codex_home: str = None,
+    config_path: str = None,
+    brainstorm_paths=None,
+    audit_paths=None,
+    discarded_paths=None,
+    palace_path: str = None,
+    runtime_root: str = None,
+    sync: str = "if-needed",
+    refresh_palace: bool = False,
+    mode: str = "restart",
+    n_results: int = 3,
+) -> dict:
+    if mode not in RECAP_MODES:
+        raise ValueError(f"Unknown writing recap mode: {mode}")
+
+    prepared = prepare_writing_sidecar(
+        vault_dir=vault_dir,
+        project=project,
+        out_dir=out_dir,
+        codex_home=codex_home,
+        config_path=config_path,
+        brainstorm_paths=brainstorm_paths,
+        audit_paths=audit_paths,
+        discarded_paths=discarded_paths,
+        palace_path=palace_path,
+        runtime_root=runtime_root,
+        sync=sync,
+        refresh_palace=refresh_palace,
+    )
+    status = prepared["status"]
+    doc_bundle = _load_live_doc_bundle(Path(status["project_root"]))
+    warnings = list(prepared["warnings"])
+    query_plan = _select_recap_queries(doc_bundle, status["project"], mode)
+    results = _run_sidecar_queries(
+        status,
+        query_plan,
+        n_results=n_results,
+        warnings=warnings,
+        curated_for_context=True,
+    )
+    phase = _extract_phase(doc_bundle)
+
+    recap = {
+        "project": status["project"],
+        "project_root": status["project_root"],
+        "vault_root": status["vault_root"],
+        "mode": mode,
+        "synced": prepared["synced"],
+        "sync_summary": prepared["sync_summary"],
+        "state": status["state"],
+        "stale": status["stale"],
+        "reasons": status["stale_reasons"],
+        "last_synced_at": status["last_synced_at"],
+        "phase": phase,
+        "current_chapter": _extract_field(doc_bundle, "chapter"),
+        "current_arc": _extract_field(doc_bundle, "arc"),
+        "doc_sources": {
+            name: payload["path"]
+            for name, payload in doc_bundle.items()
+            if payload["exists"]
+        },
+        "sections": _build_recap_sections(doc_bundle, results, phase, mode),
+        "queries_run": query_plan,
+        "results": results,
+        "warnings": warnings,
+        "source_priority": ["live_docs", "sidecar"],
+    }
+    return recap
+
+
+def render_writing_recap(recap_data: dict) -> str:
+    lines = [
+        "",
+        "=" * 60,
+        f"  Writing Sidecar Recap ({recap_data['mode']})",
+        "=" * 60,
+        f"  Project: {recap_data['project_root']}",
+        f"  State:   {recap_data['state'].upper()}",
+    ]
+    if recap_data.get("phase"):
+        lines.append(f"  Phase:   {recap_data['phase']}")
+    if recap_data.get("current_chapter"):
+        lines.append(f"  Chapter: {recap_data['current_chapter']}")
+    if recap_data.get("current_arc"):
+        lines.append(f"  Arc:     {recap_data['current_arc']}")
+
+    if recap_data.get("warnings"):
+        lines.append("\n  Warnings:")
+        for warning in recap_data["warnings"]:
+            lines.append(f"    - {warning}")
+
+    for title, items in recap_data["sections"].items():
+        lines.append(f"\n  {title}:")
+        if not items:
+            lines.append("    - none")
+            continue
+        for item in items:
+            lines.append(f"    - {item}")
+
+    if recap_data.get("results"):
+        lines.append("\n  Sidecar evidence:")
+        for packet in recap_data["results"]:
+            lines.append(f'    {packet["mode"]} -> "{packet["query"]}"')
+            if not packet.get("results"):
+                lines.append("      - no hits")
+                continue
+            for hit in packet["results"][:3]:
+                lines.append(
+                    f"      - {hit.get('room', '?')}: {hit.get('source_file', '?')} :: {_preview_text(hit.get('text', ''))}"
+                )
+
+    lines.extend(["", "=" * 60, ""])
+    return "\n".join(lines)
+
+
+def print_writing_recap(recap_data: dict):
+    print(render_writing_recap(recap_data))
+
+
+def _load_live_doc_bundle(project_root: Path) -> dict:
+    bundle = {}
+    for name, relative_path in DOC_RELATIVE_PATHS.items():
+        path = project_root / relative_path
+        text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        structure = _parse_markdown_doc(text)
+        bundle[name] = {
+            "path": str(path),
+            "exists": path.exists(),
+            "text": text,
+            "highlights": structure["highlights"],
+            "fields": structure["fields"],
+            "sections": structure["sections"],
+        }
+    return bundle
+
+
+def _parse_markdown_doc(text: str, max_items: int = 8) -> dict:
+    fields = {}
+    sections = {"_root": []}
+    current_section = "_root"
+    in_code = False
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code or not stripped:
+            continue
+        if stripped.startswith("#"):
+            current_section = _clean_highlight_line(stripped.lstrip("#").strip()) or "_root"
+            sections.setdefault(current_section, [])
+            continue
+        for item in _extract_structured_line_items(stripped):
+            cleaned = _clean_highlight_line(item)
+            if not cleaned or len(cleaned) < 4 or _is_low_value_doc_line(cleaned):
+                continue
+            label, value = _split_labeled_line(cleaned)
+            if label and value:
+                field_key = _canonical_field_key(label)
+                fields.setdefault(field_key, []).append(
+                    {
+                        "label": label,
+                        "value": value,
+                        "line": f"{label}: {value}",
+                    }
+                )
+                sections.setdefault(current_section, []).append(f"{label}: {value}")
+            else:
+                sections.setdefault(current_section, []).append(cleaned)
+    return {
+        "fields": fields,
+        "sections": sections,
+        "highlights": _select_structured_highlights(fields, sections, max_items=max_items),
+    }
+
+
+def _extract_markdown_highlights(text: str, max_items: int = 8) -> list[str]:
+    return _parse_markdown_doc(text, max_items=max_items)["highlights"]
+
+
+def _extract_structured_line_items(stripped: str) -> list[str]:
+    if re.fullmatch(r"[:\-\s|]+", stripped):
+        return []
+    if not stripped.startswith("|"):
+        return [stripped]
+    return _parse_table_row(stripped)
+
+
+def _parse_table_row(stripped: str) -> list[str]:
+    cells = [
+        _clean_highlight_line(cell)
+        for cell in stripped.strip().strip("|").split("|")
+    ]
+    cells = [cell for cell in cells if cell]
+    if not cells:
+        return []
+    if all(re.fullmatch(r"[-:]+", cell.replace(" ", "")) for cell in cells):
+        return []
+    header_terms = {
+        "file",
+        "status",
+        "thread",
+        "notes",
+        "date",
+        "score",
+        "result",
+        "dominant problem",
+        "words written",
+        "pov",
+        "location",
+        "purpose",
+    }
+    normalized_cells = {_normalize_heading_key(cell) for cell in cells}
+    if normalized_cells and normalized_cells.issubset(header_terms):
+        return []
+    return [" — ".join(cells[:3])]
+
+
+def _clean_highlight_line(line: str) -> str:
+    cleaned = re.sub(r"^\s*>+\s*", "", line)
+    cleaned = re.sub(r"^\s*\[[ xX]\]\s+", "", cleaned)
+    cleaned = re.sub(r"^\s*(?:[-*+]\s+|\d+\.\s+)", "", cleaned)
+    cleaned = cleaned.replace("**", "").replace("__", "").replace("`", "")
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip(" -")
+
+
+def _is_low_value_doc_line(line: str) -> bool:
+    lowered = _normalize_heading_key(line)
+    if any(lowered.startswith(_normalize_heading_key(prefix)) for prefix in LOW_VALUE_LINE_PREFIXES):
+        return True
+    return any(_normalize_heading_key(fragment) in lowered for fragment in LOW_VALUE_LINE_SUBSTRINGS)
+
+
+def _split_labeled_line(line: str) -> tuple[str | None, str | None]:
+    match = re.match(r"^(?P<label>[A-Za-z][A-Za-z0-9 /'()_-]+):\s*(?P<value>.+)$", line)
+    if not match:
+        return None, None
+    return match.group("label").strip(), match.group("value").strip()
+
+
+def _normalize_heading_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def _canonical_field_key(label: str) -> str:
+    normalized = _normalize_heading_key(label)
+    for field_name, labels in FIELD_LABELS.items():
+        if any(_normalize_heading_key(candidate) == normalized for candidate in labels):
+            return field_name
+    return normalized.replace(" ", "_")
+
+
+def _section_matches(title: str, keywords: Sequence[str]) -> bool:
+    if not keywords:
+        return True
+    normalized_title = _normalize_heading_key(title)
+    return any(_normalize_heading_key(keyword) in normalized_title for keyword in keywords)
+
+
+def _select_structured_highlights(fields: dict, sections: dict, max_items: int = 8) -> list[str]:
+    highlights = []
+    seen = set()
+
+    def add(item: str):
+        normalized = _normalize_text(item)
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        highlights.append(item)
+
+    for field_name in STRUCTURED_HIGHLIGHT_FIELDS:
+        for entry in fields.get(field_name, []):
+            add(entry["line"])
+            if len(highlights) >= max_items:
+                return highlights
+
+    for keyword in PREFERRED_SECTION_KEYWORDS:
+        for title, items in sections.items():
+            if not _section_matches(title, (keyword,)):
+                continue
+            for item in items:
+                add(item)
+                if len(highlights) >= max_items:
+                    return highlights
+
+    for items in sections.values():
+        for item in items:
+            add(item)
+            if len(highlights) >= max_items:
+                return highlights
+    return highlights
+
+
+def _iter_signal_candidates(
+    doc_bundle: dict,
+    doc_order: Sequence[str],
+    *,
+    section_keywords: Sequence[str] = (),
+    field_names: Sequence[str] = (),
+) -> Iterable[str]:
+    seen = set()
+    for doc_name in doc_order:
+        payload = doc_bundle.get(doc_name, {})
+        for field_name in field_names:
+            for entry in payload.get("fields", {}).get(field_name, []):
+                normalized = _normalize_text(entry["line"])
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                yield entry["line"]
+        section_items = payload.get("sections", {})
+        yielded_titles = set()
+        for keyword in section_keywords:
+            for title, items in section_items.items():
+                if title in yielded_titles or not _section_matches(title, (keyword,)):
+                    continue
+                yielded_titles.add(title)
+                for item in items:
+                    normalized = _normalize_text(item)
+                    if normalized in seen:
+                        continue
+                    seen.add(normalized)
+                    yield item
+        if not section_keywords:
+            for title, items in section_items.items():
+                for item in items:
+                    normalized = _normalize_text(item)
+                    if normalized in seen:
+                        continue
+                    seen.add(normalized)
+                    yield item
+        for item in payload.get("highlights", []):
+            normalized = _normalize_text(item)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            yield item
+
+
+def _collect_section_lines(
+    doc_bundle: dict,
+    doc_order: Sequence[str],
+    *,
+    section_keywords: Sequence[str] = (),
+    field_names: Sequence[str] = (),
+    keywords: Sequence[str] = (),
+    max_items: int = 5,
+    exclude: set[str] | None = None,
+) -> list[str]:
+    items = []
+    seen = set(exclude or set())
+    keyword_set = tuple(keyword.lower() for keyword in keywords)
+    for candidate in _iter_signal_candidates(
+        doc_bundle,
+        doc_order,
+        section_keywords=section_keywords,
+        field_names=field_names,
+    ):
+        cleaned = _clean_highlight_line(candidate)
+        if not cleaned:
+            continue
+        normalized = _normalize_text(cleaned)
+        if normalized in seen:
+            continue
+        if keyword_set and not any(keyword in cleaned.lower() for keyword in keyword_set):
+            continue
+        seen.add(normalized)
+        items.append(cleaned)
+        if len(items) >= max_items:
+            return items
+    if items or not keywords:
+        return items
+    return _collect_section_lines(
+        doc_bundle,
+        doc_order,
+        section_keywords=section_keywords,
+        field_names=field_names,
+        max_items=max_items,
+        exclude=exclude,
+    )
+
+
+def _extract_field(doc_bundle: dict, field_name: str) -> str | None:
+    canonical = _canonical_field_key(field_name)
+    labels = FIELD_LABELS[field_name]
+    for doc_name in ("current_chapter_notes", "current_notes", "story_so_far"):
+        payload = doc_bundle.get(doc_name, {})
+        for entry in payload.get("fields", {}).get(canonical, []):
+            value = entry.get("value")
+            if value:
+                return value
+        text = doc_bundle[doc_name]["text"]
+        if not text:
+            continue
+        for raw_line in text.splitlines():
+            cleaned = _clean_highlight_line(raw_line)
+            lowered = cleaned.lower()
+            for label in labels:
+                prefix = f"{label.lower()}:"
+                if lowered.startswith(prefix):
+                    return cleaned[len(label) + 1 :].strip()
+    return None
+
+
+def _extract_phase(doc_bundle: dict) -> str | None:
+    phase = _extract_field(doc_bundle, "phase")
+    return phase.upper() if phase else None
+
+
+def _select_context_queries(doc_bundle: dict, project: str, mode: str) -> list[dict]:
+    if mode == "startup":
+        planning_query = _pick_signal_query(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes"),
+            section_keywords=(
+                "next start point",
+                "threads carried forward",
+                "chapter goals",
+                "open work",
+                "recommended next loadout",
+            ),
+            field_names=("next_action", "status"),
+            keywords=(
+                "atlantis",
+                "chapter 2",
+                "guardrail",
+                "physician",
+                "sphere",
+                "guardian",
+                "sponsorship",
+                "medical",
+                "protection",
+                "mera",
+            ),
+        ) or _fallback_query(project, "planning")
+        history_query = _pick_signal_query(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes", "story_so_far"),
+            section_keywords=("threads carried forward", "continuity closeout", "locked decisions"),
+            field_names=("status", "audit_status"),
+            keywords=(
+                "sponsorship",
+                "investigation",
+                "timing",
+                "search",
+                "guardian",
+                "decision",
+                "thread",
+                "carry",
+                "arthur",
+                "ciri",
+                "bruce",
+                "barry",
+                "darkseid",
+            ),
+            exclude={planning_query},
+        ) or _fallback_query(project, "history")
+        return [
+            {"mode": "planning", "query": planning_query},
+            {"mode": "history", "query": history_query},
+        ]
+
+    return [
+        {"mode": mode, "query": query}
+        for query in _collect_mode_queries(doc_bundle, project, mode)
+    ]
+
+
+def _select_recap_queries(doc_bundle: dict, project: str, mode: str) -> list[dict]:
+    if mode == "restart":
+        return _select_context_queries(doc_bundle, project, "startup")
+    if mode == "handoff":
+        return [
+            {
+                "mode": "planning",
+                "query": _pick_signal_query(
+                    doc_bundle,
+                    ("current_chapter_notes", "current_notes"),
+                    section_keywords=("next start point", "chapter goals", "open work"),
+                    field_names=("next_action",),
+                )
+                or _fallback_query(project, "planning"),
+            },
+            {
+                "mode": "history",
+                "query": _pick_signal_query(
+                    doc_bundle,
+                    ("current_chapter_notes", "current_notes", "story_so_far"),
+                    section_keywords=("threads carried forward", "locked decisions", "continuity closeout"),
+                    field_names=("status",),
+                    keywords=("decision", "carry", "thread", "sponsorship", "search", "investigation"),
+                )
+                or _fallback_query(project, "history"),
+            },
+            {
+                "mode": "audit",
+                "query": _pick_signal_query(
+                    doc_bundle,
+                    ("current_chapter_notes", "current_notes"),
+                    section_keywords=("open work", "chapter goals", "final checklist", "audit log"),
+                    field_names=("audit_status", "latest_score"),
+                    keywords=("risk", "problem", "watch", "failed", "cut", "repeat"),
+                )
+                or _fallback_query(project, "audit"),
+            },
+        ]
+    return [
+        {
+            "mode": "history",
+            "query": _pick_signal_query(
+                doc_bundle,
+                ("story_so_far", "current_notes", "current_chapter_notes"),
+                section_keywords=("continuity closeout", "threads carried forward"),
+                field_names=("status",),
+                keywords=("timeline", "after", "before", "chronology", "status", "carry"),
+            )
+            or _fallback_query(project, "history"),
+        },
+        {
+            "mode": "research",
+            "query": _pick_signal_query(
+                doc_bundle,
+                ("story_so_far", "current_notes"),
+                section_keywords=("locked decisions", "what is actually ready"),
+                keywords=("world", "rule", "location", "reference", "canon"),
+            )
+            or _fallback_query(project, "research"),
+        },
+    ]
+
+
+def _collect_mode_queries(doc_bundle: dict, project: str, mode: str) -> list[str]:
+    mode_specs = {
+        "planning": {
+            "doc_order": ("current_chapter_notes", "current_notes"),
+            "section_keywords": (
+                "next start point",
+                "threads carried forward",
+                "chapter goals",
+                "open work",
+                "recommended next loadout",
+            ),
+            "field_names": ("next_action", "status"),
+            "keywords": ("next", "guardrail", "scene", "beat", "watch", "risk", "atlantis", "chapter 2"),
+        },
+        "audit": {
+            "doc_order": ("current_chapter_notes", "current_notes"),
+            "section_keywords": ("final checklist", "audit log", "open work", "chapter goals"),
+            "field_names": ("audit_status", "latest_score"),
+            "keywords": ("risk", "problem", "watch", "failed", "cut", "repeat"),
+        },
+        "history": {
+            "doc_order": ("current_chapter_notes", "current_notes", "story_so_far"),
+            "section_keywords": ("threads carried forward", "continuity closeout", "locked decisions"),
+            "field_names": ("status",),
+            "keywords": ("decision", "resolved", "carry", "status", "thread", "history"),
+        },
+        "research": {
+            "doc_order": ("story_so_far", "current_notes"),
+            "section_keywords": ("locked decisions", "what is actually ready"),
+            "field_names": (),
+            "keywords": ("world", "rule", "location", "reference", "canon"),
+        },
+    }
+    spec = mode_specs[mode]
+    queries = []
+    seen = set()
+    preferred = _pick_signal_query(
+        doc_bundle,
+        spec["doc_order"],
+        section_keywords=spec["section_keywords"],
+        field_names=spec["field_names"],
+        keywords=spec["keywords"],
+    )
+    if preferred:
+        seen.add(preferred)
+        queries.append(preferred)
+    secondary = _pick_signal_query(
+        doc_bundle,
+        spec["doc_order"],
+        section_keywords=spec["section_keywords"],
+        field_names=spec["field_names"],
+        exclude=seen,
+    )
+    if secondary and secondary not in seen:
+        queries.append(secondary)
+    if not queries:
+        queries.append(_fallback_query(project, mode))
+    return queries
+
+
+def _pick_signal_query(
+    doc_bundle: dict,
+    doc_order: Sequence[str],
+    *,
+    section_keywords: Sequence[str] = (),
+    field_names: Sequence[str] = (),
+    keywords: Sequence[str] = (),
+    exclude: set[str] | None = None,
+) -> str | None:
+    exclude = exclude or set()
+    keyword_set = tuple(keyword.lower() for keyword in keywords)
+    fallback = None
+    for item in _iter_signal_candidates(
+        doc_bundle,
+        doc_order,
+        section_keywords=section_keywords,
+        field_names=field_names,
+    ):
+        condensed = _condense_query(item)
+        if not condensed or condensed in exclude:
+            continue
+        lowered = condensed.lower()
+        if keyword_set and any(keyword in lowered for keyword in keyword_set):
+            return condensed
+        if fallback is None:
+            fallback = condensed
+    return fallback
+
+
+def _condense_query(text: str) -> str:
+    cleaned = _clean_highlight_line(text)
+    if not cleaned or _is_low_value_doc_line(cleaned):
+        return ""
+    _, value = _split_labeled_line(cleaned)
+    cleaned = value or cleaned
+    cleaned = re.split(r"\s+[—-]\s+", cleaned, maxsplit=1)[0]
+    cleaned = re.split(r"\s*(?:,|;|\bthen\b|\bbut\b)\s*", cleaned, maxsplit=1)[0]
+    words = [word for word in cleaned.split() if not re.fullmatch(r"[`*_]+", word)]
+    if words and words[0].lower() in QUERY_STOP_LEADS:
+        words = words[1:]
+    cleaned = " ".join(words).strip(" ,;:-")
+    if len(cleaned.split()) > 12:
+        cleaned = " ".join(cleaned.split()[:12])
+    return cleaned[:160].rstrip(" ,;:")
+
+
+def _fallback_query(project: str, mode: str) -> str:
+    suffix = {
+        "planning": "handoff",
+        "audit": "audit",
+        "history": "decision history",
+        "research": "reference",
+    }[mode]
+    return f"{project} {suffix}"
+
+
+def _run_sidecar_queries(
+    status: dict,
+    query_plan: list[dict],
+    n_results: int,
+    warnings: list[str],
+    curated_for_context: bool = False,
+) -> list[dict]:
+    palace_path = Path(status["palace_path"])
+    if not palace_path.exists():
+        warnings.append(
+            "No sidecar palace exists yet. Run writing-sidecar sync if this task depends on sidecar retrieval."
+        )
+        return []
+
+    packets = []
+    with _sidecar_runtime_environment(Path(status["runtime_root"])):
+        for item in query_plan:
+            packet = search_writing_sidecar(
+                query=item["query"],
+                palace_path=str(palace_path),
+                wing=_project_wing(status["project"]),
+                mode=item["mode"],
+                n_results=n_results,
+            )
+            if packet.get("error"):
+                warnings.append(f"Search error for {item['mode']}: {packet['error']}")
+                continue
+            if curated_for_context:
+                packet = _curate_query_packet(packet)
+            packets.append(packet)
+    return packets
+
+
+def _curate_query_packet(packet: dict) -> dict:
+    results = list(packet.get("results", []))
+    if not results:
+        return packet
+
+    deduped = []
+    seen = set()
+    for hit in results:
+        preview = _preview_text(hit.get("text", ""), max_words=18)
+        key = (hit.get("source_file"), _normalize_text(preview))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(hit)
+
+    if packet.get("mode") == "history" and any(hit.get("room") != "chat_process" for hit in deduped):
+        preferred_rooms = {
+            "audits": 0,
+            "brainstorms": 1,
+            "discarded_paths": 2,
+            "archived_notes": 3,
+            "chat_process": 4,
+        }
+        deduped = [
+            hit
+            for _, hit in sorted(
+                enumerate(deduped),
+                key=lambda item: (preferred_rooms.get(item[1].get("room"), 99), item[0]),
+            )
+        ]
+
+    packet["results"] = deduped
+    return packet
+
+
+def _extract_recommended_loadout(doc_bundle: dict, derived_phase: str | None) -> list[str]:
+    payload = doc_bundle.get("current_notes", {})
+    for title, lines in payload.get("sections", {}).items():
+        if not _section_matches(title, ("recommended next loadout",)):
+            continue
+        items = []
+        collecting = derived_phase in {"BRAINDUMP", "SCRIPTING", "STAGING", "PROSE"}
+        for line in lines:
+            cleaned = _clean_highlight_line(line)
+            lowered = _normalize_heading_key(cleaned)
+            if cleaned.endswith(":"):
+                if derived_phase in {"BRAINDUMP", "SCRIPTING", "STAGING"}:
+                    collecting = "planning" in lowered and not any(
+                        token in lowered for token in ("prose", "draft", "generation")
+                    )
+                elif derived_phase == "PROSE":
+                    collecting = any(token in lowered for token in ("prose", "draft", "generation"))
+                else:
+                    collecting = False
+                continue
+            if collecting and cleaned not in items:
+                items.append(cleaned)
+        if items:
+            return items
+    return []
+
+
+def _derive_target_phase(doc_bundle: dict, phase: str | None) -> str | None:
+    status_text = _extract_field(doc_bundle, "status") or ""
+    next_action = _extract_field(doc_bundle, "next_action") or ""
+    combined = f"{status_text} {next_action}".lower()
+    if any(token in combined for token in ("planning", "plan", "scene design", "sequencing", "structure")):
+        return "SCRIPTING"
+    if any(token in combined for token in ("draft", "write", "prose")):
+        return "PROSE"
+    return phase
+
+
+def _derive_suggested_loadout(doc_bundle: dict, phase: str | None) -> list[str]:
+    target_phase = _derive_target_phase(doc_bundle, phase)
+    explicit = _extract_recommended_loadout(doc_bundle, target_phase)
+    if explicit:
+        return explicit
+    return PHASE_LOADOUT.get(target_phase or "", PHASE_LOADOUT.get(phase or "", []))
+
+
+def _collect_recent_artifacts(output_root: Path, limit: int = 5) -> list[dict]:
+    if not output_root.exists():
+        return []
+    items = []
+    for room in ("brainstorms", "audits", "discarded_paths", "chat_process"):
+        room_dir = output_root / room
+        if not room_dir.exists():
+            continue
+        for path in room_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            stat = path.stat()
+            items.append(
+                {
+                    "room": room,
+                    "path": str(path.relative_to(output_root)),
+                    "mtime": stat.st_mtime,
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat(),
+                }
+            )
+    items.sort(key=lambda item: item["mtime"], reverse=True)
+    return items[:limit]
+
+
+def _build_recap_sections(doc_bundle: dict, results: list[dict], phase: str | None, mode: str) -> dict:
+    used = set()
+
+    def reserve(items: list[str]) -> list[str]:
+        kept = []
+        for item in items:
+            normalized = _normalize_text(item)
+            if not normalized or normalized in used:
+                continue
+            used.add(normalized)
+            kept.append(item)
+        return kept
+
+    if mode == "restart":
+        where_we_are = reserve(
+            _section_from_docs(
+                doc_bundle,
+                ("current_notes", "current_chapter_notes"),
+                section_keywords=DOC_SECTION_HINTS["startup_where"],
+                field_names=("status", "phase", "arc", "chapter", "working_title", "next_action"),
+                max_items=6,
+            )
+        )
+        must_not_forget = reserve(
+            _section_from_docs(
+                doc_bundle,
+                ("current_chapter_notes", "current_notes", "story_so_far"),
+                section_keywords=DOC_SECTION_HINTS["startup_memory"],
+                keywords=("decision", "carry", "watch", "risk", "guardrail", "must", "thread"),
+                max_items=5,
+                exclude=used,
+            )
+            + _extract_story_memory_evidence(results, max_items=3)
+        )
+        return {
+            "Where We Are": where_we_are,
+            "Must Not Forget": must_not_forget,
+            "Suggested Next Loadout": _derive_suggested_loadout(doc_bundle, phase),
+        }
+    if mode == "handoff":
+        current_state = reserve(
+            _section_from_docs(
+                doc_bundle,
+                ("current_notes", "current_chapter_notes"),
+                section_keywords=DOC_SECTION_HINTS["handoff_state"],
+                field_names=("status", "phase", "arc", "chapter", "working_title"),
+                max_items=6,
+            )
+        )
+        carry_forward = reserve(
+            _section_from_docs(
+                doc_bundle,
+                ("current_chapter_notes", "current_notes", "story_so_far"),
+                section_keywords=("threads carried forward", "locked decisions", "continuity closeout"),
+                keywords=("decision", "resolved", "carry", "status", "thread"),
+                max_items=5,
+                exclude=used,
+            )
+        )
+        active_risks = reserve(
+            _section_from_docs(
+                doc_bundle,
+                ("current_chapter_notes", "current_notes"),
+                section_keywords=DOC_SECTION_HINTS["handoff_risks"],
+                keywords=("risk", "watch", "problem", "danger", "issue"),
+                max_items=5,
+                exclude=used,
+            )
+        )
+        open_threads = reserve(
+            _section_from_docs(
+                doc_bundle,
+                ("current_notes", "current_chapter_notes", "story_so_far"),
+                section_keywords=("next start point", "threads carried forward", "open work"),
+                keywords=("next", "open", "pending", "thread", "todo", "tbd"),
+                max_items=5,
+                exclude=used,
+            )
+        )
+        return {
+            "Current State": current_state,
+            "Carry-Forward Decisions": carry_forward,
+            "Active Risks": active_risks,
+            "Open Threads": open_threads,
+            "Rejected Paths": _extract_rejected_path_evidence(results, max_items=5),
+        }
+    timeline_facts = reserve(
+        _section_from_docs(
+            doc_bundle,
+            ("story_so_far", "current_chapter_notes", "current_notes"),
+            section_keywords=DOC_SECTION_HINTS["continuity_facts"],
+            field_names=("status",),
+            keywords=("timeline", "before", "after", "chronology", "state", "status", "carry"),
+            max_items=5,
+        )
+    )
+    unresolved = reserve(
+        _section_from_docs(
+            doc_bundle,
+            ("current_notes", "current_chapter_notes"),
+            section_keywords=("open work", "next start point", "threads carried forward"),
+            keywords=("must", "need", "owe", "pending", "next", "unresolved"),
+            max_items=5,
+            exclude=used,
+        )
+    )
+    return {
+        "Timeline-Sensitive Facts": timeline_facts,
+        "Unresolved Obligations": unresolved,
+        "Continuity Risks": _extract_rejected_path_evidence(results, max_items=5),
+    }
+
+
+def _section_from_docs(
+    doc_bundle: dict,
+    doc_order: Sequence[str],
+    *,
+    section_keywords: Sequence[str] = (),
+    field_names: Sequence[str] = (),
+    keywords: Sequence[str] = (),
+    max_items: int = 5,
+    exclude: set[str] | None = None,
+) -> list[str]:
+    return _collect_section_lines(
+        doc_bundle,
+        doc_order,
+        section_keywords=section_keywords,
+        field_names=field_names,
+        keywords=keywords,
+        max_items=max_items,
+        exclude=exclude,
+    )
+
+
+def _extract_story_memory_evidence(results: list[dict], max_items: int = 3) -> list[str]:
+    items = []
+    seen = set()
+    for packet in results:
+        for hit in packet.get("results", []):
+            if hit.get("room") not in {"brainstorms", "audits", "discarded_paths", "chat_process"}:
+                continue
+            summary = f"{hit.get('room')}: {_preview_text(hit.get('text', ''), max_words=14)}"
+            normalized = _normalize_text(summary)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            items.append(summary)
+            if len(items) >= max_items:
+                return items
+    return items
+
+
+def _extract_rejected_path_evidence(results: list[dict], max_items: int = 5) -> list[str]:
+    items = []
+    seen = set()
+    for packet in results:
+        for hit in packet.get("results", []):
+            if hit.get("room") not in {"audits", "discarded_paths"}:
+                continue
+            summary = f"{hit.get('room')}: {_preview_text(hit.get('text', ''))}"
+            normalized = _normalize_text(summary)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            items.append(summary)
+            if len(items) >= max_items:
+                return items
+    return items
+
+
+def _preview_text(text: str, max_words: int = 20) -> str:
+    cleaned = _clean_highlight_line(text)
+    words = cleaned.split()
+    if len(words) <= max_words:
+        return cleaned
+    return " ".join(words[:max_words]) + "..."
 
 
 def scaffold_writing_sidecar(vault_dir: str, project: str, force: bool = False) -> dict:
@@ -844,11 +2353,7 @@ def _load_writing_export_config(project_root: Path, config_path: str = None):
     if config_path:
         candidate = Path(config_path).expanduser().resolve()
     else:
-        for filename in DEFAULT_WRITING_CONFIG_FILENAMES:
-            auto_candidate = project_root / filename
-            if auto_candidate.exists():
-                candidate = auto_candidate.resolve()
-                break
+        candidate = _find_project_config_path(project_root)
 
     if candidate is None:
         return {}, None
@@ -865,7 +2370,9 @@ def _load_writing_export_config(project_root: Path, config_path: str = None):
 def resolve_vault_root(vault_dir: str, project_root: Path) -> Path:
     """Infer the vault root even when the caller passes a direct project path."""
     base_path = Path(vault_dir).expanduser().resolve()
-    if base_path == project_root:
+    if base_path.is_file():
+        base_path = base_path.parent
+    if base_path == project_root or project_root in base_path.parents:
         return project_root.parent
     return base_path
 
@@ -1399,7 +2906,7 @@ def _sidecar_runtime_environment(runtime_root: Path):
 
 def doctor_writing_sidecar(
     vault_dir: str,
-    project: str,
+    project: str | None = None,
     out_dir: str = None,
     codex_home: str = None,
     config_path: str = None,

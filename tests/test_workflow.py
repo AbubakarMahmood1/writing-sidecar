@@ -12,16 +12,21 @@ from chromadb.api.client import SharedSystemClient
 from writing_sidecar.mempalace_adapter import SUPPORTED_MEMPALACE_SPEC
 from writing_sidecar.workflow import (
     STATE_FILENAME,
+    build_writing_context,
+    build_writing_recap,
     SEARCH_MODE_ROOMS,
     _ensure_dir,
     doctor_writing_sidecar,
+    discover_sidecar_projects,
     default_output_dir,
     default_palace_dir,
     default_runtime_dir,
     export_writing_corpus,
     get_writing_sidecar_status,
+    list_writing_projects,
     print_doctor_report,
     resolve_project_root,
+    resolve_sidecar_project,
     scaffold_writing_sidecar,
     search_writing_sidecar,
 )
@@ -855,5 +860,480 @@ def test_doctor_marks_unwritable_paths(monkeypatch):
         assert any(item["name"] == "output_root" and item["status"] == "fail" for item in report["checks"])
         assert any(item["name"] == "palace_path" and item["status"] == "fail" for item in report["checks"])
         assert any(item["name"] == "runtime_root" and item["status"] == "fail" for item in report["checks"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_resolve_sidecar_project_auto_detects_enclosing_project():
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        nested_dir = project_root / "notes" / "scratch"
+        write_file(
+            project_root / "writing-sidecar.yaml",
+            "brainstorms:\n  - logs/brainstorms\naudits: []\ndiscarded_paths: []\n",
+        )
+        _ensure_dir(nested_dir)
+
+        resolved = resolve_sidecar_project(str(nested_dir))
+        discovered = discover_sidecar_projects(str(vault_root))
+
+        assert resolved["project"] == "Witcher-DC"
+        assert resolved["project_root"] == project_root.resolve()
+        assert resolved["vault_root"] == vault_root.resolve()
+        assert len(discovered) == 1
+        assert discovered[0]["project_root"] == project_root.resolve()
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_list_writing_projects_reports_states():
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        clean_root = vault_root / "Witcher-DC"
+        fresh_root = vault_root / "Second-Project"
+        clean_palace = default_palace_dir(vault_root.resolve(), "Witcher-DC")
+
+        write_file(clean_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(clean_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            palace_path=str(clean_palace),
+        )
+        _ensure_dir(clean_palace)
+
+        write_file(fresh_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(fresh_root / "_story_bible" / "research" / "notes.md", "Reference")
+
+        report = list_writing_projects(str(vault_root))
+        projects = {item["project"]: item for item in report["projects"]}
+
+        assert report["count"] == 2
+        assert projects["Second-Project"]["state"] == "not_built"
+        assert projects["Witcher-DC"]["state"] == "clean"
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_build_writing_context_returns_startup_packet(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+
+        write_file(
+            project_root / "writing-sidecar.yaml",
+            "brainstorms:\n  - logs/brainstorms\naudits:\n  - logs/audits\ndiscarded_paths: []\n",
+        )
+        write_file(project_root / "_story_bible" / "01_Story_So_Far.md", "- Arthur sponsored Ciri into Atlantis.\n")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            textwrap.dedent(
+                """
+                > **Purpose:** Live status file. Check this before planning or drafting.
+
+                ## Current Phase
+
+                **Status:** CHAPTER 1 COMPLETE -> READY FOR CHAPTER 2 PLANNING
+                **Last Updated:** 2026-04-09
+
+                ## Recommended Next Loadout
+
+                For Chapter 2 planning:
+                1. `02B_Character_Quick_Reference.md`
+                2. `05_Current_Chapter_Notes.md`
+
+                ## Next Action
+
+                Open Chapter 2 from the Atlantis fallout position, then reset `05_Current_Chapter_Notes.md` when ready.
+                """
+            ).strip(),
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                > **Purpose:** Live scratchpad for the current writing session.
+
+                ## CURRENT FOCUS
+
+                **Arc:** Prime Earth Arrival / Darkseid Prelude
+                **Chapter:** Under Protection
+
+                ## CDLC STATUS
+
+                **Phase:** COMPLETE
+                **Audit Status:** PASS
+
+                ## THREADS CARRIED FORWARD
+
+                | Thread | Status | Notes |
+                |--------|--------|-------|
+                | Arthur's sponsorship of Ciri | ACTIVE | He has vouched for her intake |
+                | Bruce's anomaly investigation | ACTIVE | He has a footprint, not an explanation |
+
+                ## NEXT START POINT
+
+                - physician testing sphere
+                - guardian threat-presence in Atlantis
+                """
+            ).strip(),
+        )
+        write_file(project_root / "logs" / "brainstorms" / "handoff.md", "physician testing sphere")
+        write_file(project_root / "logs" / "audits" / "audit.md", "Arthur sponsorship of Ciri")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": {
+                    "brainstorms": [
+                        {
+                            "room": "brainstorms",
+                            "source_file": "handoff.md",
+                            "similarity": 0.91,
+                            "text": "physician testing sphere limits",
+                        },
+                        {
+                            "room": "brainstorms",
+                            "source_file": "handoff.md",
+                            "similarity": 0.89,
+                            "text": "guardian threat-presence in Atlantis",
+                        },
+                    ],
+                    "audits": [
+                        {
+                            "room": "audits",
+                            "source_file": "audit.md",
+                            "similarity": 0.83,
+                            "text": "Arthur sponsorship of Ciri remains the carry-forward pressure",
+                        }
+                    ],
+                    "discarded_paths": [],
+                    "chat_process": [
+                        {
+                            "room": "chat_process",
+                            "source_file": "rollout.txt",
+                            "similarity": 0.75,
+                            "text": "meta workflow chatter that should not outrank story evidence",
+                        }
+                    ],
+                    "research": [],
+                    "archived_notes": [],
+                }[kwargs["room"]],
+            },
+        )
+
+        context = build_writing_context(
+            vault_dir=str(project_root / "logs"),
+            project=None,
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            mode="startup",
+            sync="never",
+            n_results=2,
+        )
+
+        assert context["project"] == "Witcher-DC"
+        assert context["state"] == "clean"
+        assert context["phase"] == "COMPLETE"
+        assert context["current_chapter"] == "Under Protection"
+        assert context["suggested_loadout"] == [
+            "02B_Character_Quick_Reference.md",
+            "05_Current_Chapter_Notes.md",
+        ]
+        assert [item["mode"] for item in context["queries_run"]] == ["planning", "history"]
+        assert all("Purpose:" not in item["query"] for item in context["queries_run"])
+        assert all(
+            "The source-of-truth docs are aligned" not in item["query"]
+            for item in context["queries_run"]
+        )
+        planning_sources = [hit["source_file"] for hit in context["results"][0]["results"]]
+        assert planning_sources.count("handoff.md") == 1
+        history_rooms = [hit["room"] for hit in context["results"][1]["results"]]
+        assert history_rooms[0] == "audits"
+        assert context["results"]
+        assert context["recent_artifacts"]
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_build_writing_recap_continuity_uses_live_docs_and_sidecar(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(project_root / "_story_bible" / "01_Story_So_Far.md", "- Timeline: Ciri arrived after the offshore incident.\n- Reference: Atlantis remains on alert.\n")
+        write_file(project_root / "_story_bible" / "05_Current_Notes.md", "**Phase:** PROSE\n- Pending: Arthur owes the court a public explanation.\n- Risk: continuity drift around the medical chamber.\n")
+        write_file(project_root / "_story_bible" / "05_Current_Chapter_Notes.md", "- Watch: keep chronology clean before any League convergence.\n")
+        write_file(project_root / "logs" / "audits" / "audit.md", "duplicate trust loop should stay cut")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [
+                    {
+                        "room": kwargs["room"],
+                        "source_file": f"{kwargs['room']}.md",
+                        "similarity": 0.88,
+                        "text": f"{kwargs['query']} continuity evidence from {kwargs['room']}",
+                    }
+                ],
+            },
+        )
+
+        recap = build_writing_recap(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            mode="continuity",
+            sync="never",
+            n_results=2,
+        )
+
+        assert recap["project"] == "Witcher-DC"
+        assert recap["mode"] == "continuity"
+        assert recap["sections"]["Timeline-Sensitive Facts"]
+        assert recap["sections"]["Unresolved Obligations"]
+        assert recap["results"]
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_build_writing_recap_restart_avoids_duplicate_sections_and_boilerplate(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms:\n  - logs/brainstorms\naudits:\n  - logs/audits\ndiscarded_paths: []\n")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            textwrap.dedent(
+                """
+                > **Purpose:** Live status file. Check this before planning or drafting.
+
+                ## Current Phase
+
+                **Status:** CHAPTER 1 COMPLETE -> READY FOR CHAPTER 2 PLANNING
+                **Last Updated:** 2026-04-09
+
+                ## Locked Decisions
+
+                - Arthur sponsors Ciri's intake
+
+                ## Recommended Next Loadout
+
+                For Chapter 2 planning:
+                1. `02B_Character_Quick_Reference.md`
+                2. `05_Current_Chapter_Notes.md`
+
+                ## Next Action
+
+                Open Chapter 2 from the Atlantis fallout position.
+                """
+            ).strip(),
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                > **Purpose:** Live scratchpad for the current writing session.
+
+                ## CURRENT FOCUS
+
+                **Arc:** Prime Earth Arrival / Darkseid Prelude
+                **Chapter:** 1
+                **Working Title:** Chill
+
+                ## CDLC STATUS
+
+                **Phase:** COMPLETE
+
+                ## THREADS CARRIED FORWARD
+
+                | Thread | Status | Notes |
+                |--------|--------|-------|
+                | Arthur's sponsorship of Ciri | ACTIVE | He has vouched for her intake |
+                | Darkseid's redirected search | ACTIVE | Search pressure is building |
+
+                ## NEXT START POINT
+
+                - physician testing sphere
+                """
+            ).strip(),
+        )
+        write_file(project_root / "logs" / "brainstorms" / "handoff.md", "physician testing sphere")
+        write_file(project_root / "logs" / "audits" / "audit.md", "Arthur sponsorship of Ciri remains the burden")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [
+                    {
+                        "room": kwargs["room"],
+                        "source_file": f"{kwargs['room']}.md",
+                        "similarity": 0.88,
+                        "text": f"{kwargs['query']} evidence from {kwargs['room']}",
+                    }
+                ],
+            },
+        )
+
+        recap = build_writing_recap(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            mode="restart",
+            sync="never",
+            n_results=2,
+        )
+
+        where_we_are = recap["sections"]["Where We Are"]
+        must_not_forget = recap["sections"]["Must Not Forget"]
+        assert recap["sections"]["Suggested Next Loadout"] == [
+            "02B_Character_Quick_Reference.md",
+            "05_Current_Chapter_Notes.md",
+        ]
+        assert where_we_are
+        assert must_not_forget
+        assert set(where_we_are).isdisjoint(set(must_not_forget))
+        assert all("Purpose:" not in item for item in where_we_are + must_not_forget)
+        assert all("Last Updated:" not in item for item in where_we_are + must_not_forget)
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_cli_json_output_for_status_context_projects_and_doctor(monkeypatch, capsys):
+    import writing_sidecar.cli as cli
+
+    tmp_path = make_temp_dir()
+    try:
+        status_payload = {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "output_root": "C:/vault/.sidecars/witcher_dc",
+            "config_path": "C:/vault/Witcher-DC/writing-sidecar.yaml",
+            "manifest_path": "C:/vault/.sidecars/witcher_dc/.writing-sidecar-state.json",
+            "palace_path": "C:/vault/.palaces/witcher_dc",
+            "runtime_root": "C:/vault/.mempalace-sidecar-runtime/witcher_dc",
+            "room_counts": {"brainstorms": 1},
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "built": True,
+            "stale": False,
+            "state": "clean",
+            "stale_reasons": [],
+        }
+        context_payload = {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "mode": "startup",
+            "synced": False,
+            "sync_summary": None,
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "phase": "STAGING",
+            "current_chapter": "Under Protection",
+            "current_arc": None,
+            "suggested_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "queries_run": [],
+            "results": [],
+            "warnings": [],
+            "recent_artifacts": [],
+            "doc_highlights": {},
+            "source_priority": ["live_docs", "sidecar"],
+        }
+        doctor_payload = {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "output_root": "C:/vault/.sidecars/witcher_dc",
+            "palace_path": "C:/vault/.palaces/witcher_dc",
+            "runtime_root": "C:/vault/.mempalace-sidecar-runtime/witcher_dc",
+            "codex_home": "C:/Users/test/.codex",
+            "config_path": None,
+            "mempalace_version": "3.1.0",
+            "supported_spec": SUPPORTED_MEMPALACE_SPEC,
+            "checks": [],
+            "ok": True,
+        }
+        projects_payload = {
+            "vault_root": "C:/vault",
+            "count": 1,
+            "projects": [
+                {
+                    "project": "Witcher-DC",
+                    "project_root": "C:/vault/Witcher-DC",
+                    "config_path": "C:/vault/Witcher-DC/writing-sidecar.yaml",
+                    "state": "clean",
+                    "stale": False,
+                    "last_synced_at": "2026-04-10T00:00:00+00:00",
+                    "room_counts": {"brainstorms": 1},
+                    "reasons": [],
+                }
+            ],
+        }
+
+        monkeypatch.setattr(cli, "get_writing_sidecar_status", lambda **kwargs: status_payload)
+        monkeypatch.setattr(cli, "build_writing_context", lambda **kwargs: context_payload)
+        monkeypatch.setattr(cli, "doctor_writing_sidecar", lambda **kwargs: doctor_payload)
+        monkeypatch.setattr(cli, "list_writing_projects", lambda *args, **kwargs: projects_payload)
+
+        for argv, key in (
+            (["writing-sidecar", "status", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "state"),
+            (["writing-sidecar", "context", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "mode"),
+            (["writing-sidecar", "doctor", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "ok"),
+            (["writing-sidecar", "projects", str(tmp_path), "--format", "json"], "count"),
+        ):
+            monkeypatch.setattr(sys, "argv", argv)
+            cli.main(sys.argv[1:])
+            parsed = json.loads(capsys.readouterr().out)
+            assert key in parsed
     finally:
         cleanup_temp_dir(tmp_path)

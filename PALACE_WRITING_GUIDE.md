@@ -37,10 +37,32 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 
 ## Practical AI behavior
 
-- check `writing-sidecar status` before relying on sidecar memory
+- start with `writing-sidecar context --mode startup` when entering a sidecar-enabled project
+- use `writing-sidecar status` when you only need raw health / staleness
 - if stale and the task needs process memory, run `writing-sidecar sync`
-- use `planning` for “what are our best options”
-- use `audit` for “what failed / what should stay cut”
-- use `history` for “what did we already decide”
-- use `research` for reference-heavy retrieval
+- use `writing-sidecar search --mode planning` only when `context` did not give enough planning signal
+- use `writing-sidecar search --mode audit` for “what failed / what should stay cut”
+- use `writing-sidecar search --mode history` for “what did we already decide”
+- use `writing-sidecar search --mode research` for reference-heavy retrieval
+- use `writing-sidecar recap --mode restart` after a long break
+- use `writing-sidecar recap --mode handoff` before handing work to another assistant or another session
+- use `writing-sidecar recap --mode continuity` when the main risk is drift, obligations, or timeline confusion
 
+## Startup-first flow
+
+Recommended order:
+
+1. `writing-sidecar doctor <vault-or-project> --project <name>`
+2. `writing-sidecar context <vault-or-project> --project <name> --mode startup`
+3. `writing-sidecar search ...` only if you need narrower follow-up evidence
+4. `writing-sidecar recap ...` only when you are recovering from a break, doing a handoff, or checking continuity risk
+
+## JSON output
+
+If another tool or assistant layer needs machine-readable output, use `--format json` on:
+
+- `status`
+- `context`
+- `recap`
+- `projects`
+- `doctor`

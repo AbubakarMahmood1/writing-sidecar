@@ -4,7 +4,7 @@
 
 It keeps process memory separate from canon:
 
-- `writing-sidecar` handles project-aware export, staleness checks, intent-aware search, scaffolding, and runtime isolation.
+- `writing-sidecar` handles project-aware export, staleness checks, intent-aware search, startup context, recap generation, scaffolding, and runtime isolation.
 - MemPalace handles transcript normalization, mining, and semantic search.
 - Your story bible stays the source of truth.
 
@@ -41,10 +41,21 @@ Windows note:
 writing-sidecar init <vault-or-project> --project Witcher-DC
 writing-sidecar status <vault-or-project> --project Witcher-DC
 writing-sidecar export <vault-or-project> --project Witcher-DC
+writing-sidecar context <vault-or-project> --project Witcher-DC
 writing-sidecar search <vault-or-project> --project Witcher-DC --query "Arthur sponsorship"
+writing-sidecar recap <vault-or-project> --project Witcher-DC --mode restart
 writing-sidecar sync <vault-or-project> --project Witcher-DC --query "Arthur sponsorship"
 writing-sidecar doctor <vault-or-project> --project Witcher-DC
+writing-sidecar projects <vault>
 ```
+
+Structured output is available on:
+
+- `status --format json`
+- `context --format json`
+- `recap --format json`
+- `projects --format json`
+- `doctor --format json`
 
 ## What It Does
 
@@ -52,6 +63,9 @@ writing-sidecar doctor <vault-or-project> --project Witcher-DC
 - tracks state in `.writing-sidecar-state.json`
 - rebuilds only when inputs actually changed
 - searches by intent instead of dumping all rooms together
+- builds a compact startup packet for assistants with `context`
+- generates deterministic restart / handoff / continuity recaps with `recap`
+- auto-resolves the project when the input path is already inside one sidecar-enabled project
 - isolates Chroma/ONNX caches under a vault-local runtime directory
 
 Default project paths:
@@ -87,6 +101,43 @@ Once this package becomes your normal entrypoint, treat `mempalace-fork` as a co
 
 - [Migration from `mempalace writing-*`](./MIGRATION.md)
 - [Palace Writing Guide](./PALACE_WRITING_GUIDE.md)
+
+## Recommended Codex Flow
+
+For normal project startup:
+
+1. `writing-sidecar doctor <vault-or-project> --project <name>`
+2. `writing-sidecar context <vault-or-project> --project <name> --mode startup`
+3. `writing-sidecar search ...` only when you need a tighter follow-up query
+4. do the normal writing task
+
+Examples:
+
+```bash
+writing-sidecar context C:/vault --project Witcher-DC --mode startup
+writing-sidecar recap C:/vault --project Witcher-DC --mode restart
+writing-sidecar projects C:/vault --format json
+```
+
+## JSON contract
+
+When you use `--format json`, v2 keeps these top-level keys stable where they apply:
+
+- `project`
+- `project_root`
+- `vault_root`
+- `state`
+- `stale`
+- `reasons`
+- `last_synced_at`
+
+Command-specific payload keys remain stable too:
+
+- `status`: `room_counts`, `config_path`, `manifest_path`, `palace_path`, `runtime_root`
+- `context`: `mode`, `queries_run`, `results`, `warnings`, `suggested_loadout`, `recent_artifacts`
+- `recap`: `mode`, `sections`, `queries_run`, `results`, `warnings`
+- `projects`: `count`, `projects`
+- `doctor`: `checks`, `ok`, `supported_spec`, `mempalace_version`
 
 ## Maintenance Rule
 
