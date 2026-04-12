@@ -1,0 +1,7 @@
+__pycache__/
+.pytest_cache/
+.tmp-tests/
+test-artifacts-writing-export/
+*.pyc
+.venv/
+.coverage
