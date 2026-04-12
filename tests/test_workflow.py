@@ -14,6 +14,7 @@ from writing_sidecar.workflow import (
     STATE_FILENAME,
     build_writing_context,
     build_writing_recap,
+    build_writing_session,
     maintain_writing_sidecar,
     SEARCH_MODE_ROOMS,
     _ensure_dir,
@@ -1294,7 +1295,453 @@ def test_build_writing_recap_restart_avoids_duplicate_sections_and_boilerplate(m
         cleanup_temp_dir(tmp_path)
 
 
-def test_cli_json_output_for_status_context_projects_and_doctor(monkeypatch, capsys):
+def test_build_writing_session_startup_recommends_followup_and_can_write(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+        runtime_root = tmp_path / "runtime"
+
+        write_file(
+            project_root / "writing-sidecar.yaml",
+            "brainstorms:\n  - logs/brainstorms\naudits:\n  - logs/audits\ndiscarded_paths: []\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            textwrap.dedent(
+                """
+                **Status:** CHAPTER 1 COMPLETE -> READY FOR CHAPTER 2 PLANNING
+
+                ## Recommended Next Loadout
+
+                For Chapter 2 planning:
+                1. `02B_Character_Quick_Reference.md`
+                2. `05_Current_Chapter_Notes.md`
+
+                ## Next Action
+
+                Open Chapter 2 from the Atlantis fallout position.
+                """
+            ).strip(),
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                **Phase:** COMPLETE
+                **Chapter:** 1
+
+                ## THREADS CARRIED FORWARD
+
+                - Arthur's sponsorship of Ciri remains active.
+
+                ## NEXT START POINT
+
+                - physician testing sphere
+                """
+            ).strip(),
+        )
+        write_file(project_root / "logs" / "checkpoints" / "checkpoint.md", "startup checkpoint")
+        write_file(project_root / "logs" / "brainstorms" / "handoff.md", "physician testing sphere")
+        write_file(project_root / "logs" / "audits" / "audit.md", "Arthur sponsorship of Ciri")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": {
+                    "checkpoints": [
+                        {
+                            "room": "checkpoints",
+                            "source_file": "checkpoint.md",
+                            "similarity": 0.94,
+                            "text": "startup checkpoint keeps Atlantis pressure ahead of chatter",
+                        }
+                    ],
+                    "brainstorms": [
+                        {
+                            "room": "brainstorms",
+                            "source_file": "handoff.md",
+                            "similarity": 0.9,
+                            "text": "physician testing sphere",
+                        }
+                    ],
+                    "audits": [
+                        {
+                            "room": "audits",
+                            "source_file": "audit.md",
+                            "similarity": 0.82,
+                            "text": "Arthur sponsorship of Ciri remains the main burden",
+                        }
+                    ],
+                    "discarded_paths": [],
+                    "chat_process": [],
+                    "research": [],
+                    "archived_notes": [],
+                }[kwargs["room"]],
+            },
+        )
+        monkeypatch.setattr(
+            "writing_sidecar.workflow._mine_exported_sidecar",
+            lambda output_root, project, palace_path, runtime_root, refresh_palace=False: _ensure_dir(
+                Path(palace_path)
+            ),
+        )
+
+        preview = build_writing_session(
+            vault_dir=str(project_root),
+            task="startup",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            sync="never",
+            n_results=2,
+        )
+
+        assert preview["task"] == "startup"
+        assert preview["write_performed"] is False
+        assert preview["suggested_loadout"] == [
+            "02B_Character_Quick_Reference.md",
+            "05_Current_Chapter_Notes.md",
+        ]
+        assert any("--task startup --write" in item for item in preview["recommended_actions"])
+        assert any("--task planning --write" in item for item in preview["recommended_actions"])
+
+        written = build_writing_session(
+            vault_dir=str(project_root),
+            task="startup",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            sync="if-needed",
+            write=True,
+            n_results=2,
+        )
+
+        assert written["write_performed"] is True
+        assert written["sync_performed"] is True
+        assert any(path.endswith("_checkpoint.md") for path in written["paths_written"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_build_writing_session_prose_uses_planning_history_and_continuity_watch(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(
+            project_root / "_story_bible" / "01_Story_So_Far.md",
+            "- Timeline: Atlantis intake happens before any League convergence.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            textwrap.dedent(
+                """
+                **Status:** PROSE PASS NEXT
+                **Next Action:** Draft the Atlantis chamber scene without losing the sponsorship burden.
+                """
+            ).strip(),
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                **Phase:** COMPLETE
+                **Chapter:** 2
+
+                ## THREADS CARRIED FORWARD
+
+                - Arthur's sponsorship of Ciri remains politically costly.
+                - Keep continuity around the physician testing sphere.
+                """
+            ).strip(),
+        )
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [
+                    {
+                        "room": kwargs["room"],
+                        "source_file": f"{kwargs['room']}.md",
+                        "similarity": 0.88,
+                        "text": f"{kwargs['query']} evidence from {kwargs['room']}",
+                    }
+                ],
+            },
+        )
+
+        session = build_writing_session(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            task="prose",
+            sync="never",
+            n_results=2,
+        )
+
+        assert session["task"] == "prose"
+        assert [item["mode"] for item in session["queries_run"]] == ["planning", "history"]
+        assert session["suggested_loadout"] == [
+            "_story_bible/00_AI_Writing_Rules.md",
+            "_story_bible/02B_Character_Quick_Reference.md",
+            "_story_bible/05_Current_Chapter_Notes.md",
+        ]
+        assert session["recap_sections"]["Continuity Watch"]
+        assert any("--task audit" in item for item in session["recommended_actions"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("task", "expected_kinds"),
+    [
+        ("planning", ["checkpoint"]),
+        ("prose", ["checkpoint"]),
+        ("audit", ["audit"]),
+        ("handoff", ["handoff"]),
+        ("closeout", ["closeout"]),
+    ],
+)
+def test_build_writing_session_dispatches_expected_write_kinds(monkeypatch, task, expected_kinds):
+    prepared = {
+        "status": {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "output_root": "C:/vault/.sidecars/witcher_dc",
+            "palace_path": "C:/vault/.palaces/witcher_dc",
+            "runtime_root": "C:/vault/.mempalace-sidecar-runtime/witcher_dc",
+            "state": "clean",
+            "stale": False,
+            "stale_reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+        },
+        "sync_summary": None,
+        "synced": False,
+        "warnings": [],
+    }
+    doc_bundle = {
+        "current_notes": {"exists": False, "path": "", "highlights": []},
+        "current_chapter_notes": {"exists": False, "path": "", "highlights": []},
+        "story_so_far": {"exists": False, "path": "", "highlights": []},
+    }
+    fake_context = {
+        "project": "Witcher-DC",
+        "project_root": "C:/vault/Witcher-DC",
+        "vault_root": "C:/vault",
+        "mode": task,
+        "synced": False,
+        "sync_summary": None,
+        "state": "clean",
+        "stale": False,
+        "reasons": [],
+        "last_synced_at": "2026-04-10T00:00:00+00:00",
+        "phase": "PROSE",
+        "current_chapter": "2",
+        "current_arc": None,
+        "suggested_loadout": ["doc.md"],
+        "queries_run": [],
+        "results": [],
+        "warnings": [],
+        "recent_artifacts": [],
+        "doc_highlights": {},
+        "source_priority": ["live_docs", "sidecar"],
+    }
+    fake_recap = {
+        "project": "Witcher-DC",
+        "project_root": "C:/vault/Witcher-DC",
+        "vault_root": "C:/vault",
+        "mode": "handoff",
+        "synced": False,
+        "sync_summary": None,
+        "state": "clean",
+        "stale": False,
+        "reasons": [],
+        "last_synced_at": "2026-04-10T00:00:00+00:00",
+        "phase": "COMPLETE",
+        "current_chapter": "2",
+        "current_arc": None,
+        "doc_sources": {},
+        "sections": {"Current State": ["ready"]},
+        "queries_run": [],
+        "results": [],
+        "warnings": [],
+        "source_priority": ["live_docs", "sidecar"],
+    }
+    calls = []
+
+    def fake_maintain(kind, sync, **kwargs):
+        calls.append((kind, sync))
+        return {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "kind": kind,
+            "mode": "write",
+            "write_performed": True,
+            "paths_written": [f"C:/tmp/{kind}.md"],
+            "sync_performed": sync != "never",
+            "sync_summary": {} if sync != "never" else None,
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "warnings": [],
+            "source_inputs": [],
+            "generated_sections": {kind: ["Summary"]},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr("writing_sidecar.workflow.prepare_writing_sidecar", lambda **kwargs: prepared)
+    monkeypatch.setattr("writing_sidecar.workflow._load_live_doc_bundle", lambda *args, **kwargs: doc_bundle)
+    monkeypatch.setattr("writing_sidecar.workflow._build_context_payload", lambda *args, **kwargs: (doc_bundle, dict(fake_context)))
+    monkeypatch.setattr("writing_sidecar.workflow._build_recap_payload", lambda *args, **kwargs: (doc_bundle, dict(fake_recap)))
+    monkeypatch.setattr("writing_sidecar.workflow._derive_session_loadout", lambda *args, **kwargs: ["doc.md"])
+    monkeypatch.setattr("writing_sidecar.workflow._build_session_recommended_actions", lambda **kwargs: ["next"])
+    monkeypatch.setattr("writing_sidecar.workflow._collect_recent_artifacts", lambda *args, **kwargs: [])
+    monkeypatch.setattr("writing_sidecar.workflow.maintain_writing_sidecar", fake_maintain)
+    monkeypatch.setattr(
+        "writing_sidecar.workflow._select_session_queries",
+        lambda *args, **kwargs: [{"mode": "planning", "query": "q"}],
+    )
+
+    session = build_writing_session("C:/vault", project="Witcher-DC", task=task, write=True)
+
+    assert [kind for kind, _ in calls] == expected_kinds
+    assert session["write_performed"] is True
+
+
+def test_build_writing_session_debug_only_writes_discarded_when_note_or_evidence_exists(monkeypatch):
+    prepared = {
+        "status": {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "output_root": "C:/vault/.sidecars/witcher_dc",
+            "palace_path": "C:/vault/.palaces/witcher_dc",
+            "runtime_root": "C:/vault/.mempalace-sidecar-runtime/witcher_dc",
+            "state": "clean",
+            "stale": False,
+            "stale_reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+        },
+        "sync_summary": None,
+        "synced": False,
+        "warnings": [],
+    }
+    doc_bundle = {
+        "current_notes": {"exists": False, "path": "", "highlights": []},
+        "current_chapter_notes": {"exists": False, "path": "", "highlights": []},
+        "story_so_far": {"exists": False, "path": "", "highlights": []},
+    }
+    calls = []
+
+    def fake_maintain(kind, sync, **kwargs):
+        calls.append((kind, sync))
+        return {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "kind": kind,
+            "mode": "write",
+            "write_performed": True,
+            "paths_written": [f"C:/tmp/{kind}.md"],
+            "sync_performed": sync != "never",
+            "sync_summary": {} if sync != "never" else None,
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "warnings": [],
+            "source_inputs": [],
+            "generated_sections": {kind: ["Summary"]},
+            "artifacts": [],
+        }
+
+    monkeypatch.setattr("writing_sidecar.workflow.prepare_writing_sidecar", lambda **kwargs: prepared)
+    monkeypatch.setattr("writing_sidecar.workflow._load_live_doc_bundle", lambda *args, **kwargs: doc_bundle)
+    monkeypatch.setattr(
+        "writing_sidecar.workflow._build_context_payload",
+        lambda *args, **kwargs: (
+            doc_bundle,
+            {
+                "project": "Witcher-DC",
+                "project_root": "C:/vault/Witcher-DC",
+                "vault_root": "C:/vault",
+                "mode": "debug",
+                "synced": False,
+                "sync_summary": None,
+                "state": "clean",
+                "stale": False,
+                "reasons": [],
+                "last_synced_at": "2026-04-10T00:00:00+00:00",
+                "phase": "DEBUG",
+                "current_chapter": "2",
+                "current_arc": None,
+                "suggested_loadout": ["debug.md"],
+                "queries_run": [{"mode": "audit", "query": "q"}],
+                "results": [],
+                "warnings": [],
+                "recent_artifacts": [],
+                "doc_highlights": {},
+                "source_priority": ["live_docs", "sidecar"],
+            },
+        ),
+    )
+    monkeypatch.setattr("writing_sidecar.workflow._derive_session_loadout", lambda *args, **kwargs: ["debug.md"])
+    monkeypatch.setattr("writing_sidecar.workflow._build_session_recommended_actions", lambda **kwargs: ["next"])
+    monkeypatch.setattr("writing_sidecar.workflow._collect_recent_artifacts", lambda *args, **kwargs: [])
+    monkeypatch.setattr("writing_sidecar.workflow.maintain_writing_sidecar", fake_maintain)
+    monkeypatch.setattr(
+        "writing_sidecar.workflow._select_session_queries",
+        lambda *args, **kwargs: [{"mode": "audit", "query": "q"}],
+    )
+
+    build_writing_session("C:/vault", project="Witcher-DC", task="debug", write=True, sync="if-needed")
+    assert calls == [("audit", "if-needed")]
+
+    calls.clear()
+    build_writing_session(
+        "C:/vault",
+        project="Witcher-DC",
+        task="debug",
+        write=True,
+        sync="if-needed",
+        notes=["Rejected the balanced braid."],
+    )
+    assert calls == [("audit", "never"), ("discarded", "if-needed")]
+
+
+def test_cli_json_output_for_status_context_projects_doctor_and_session(monkeypatch, capsys):
     import writing_sidecar.cli as cli
 
     tmp_path = make_temp_dir()
@@ -1367,17 +1814,38 @@ def test_cli_json_output_for_status_context_projects_and_doctor(monkeypatch, cap
                 }
             ],
         }
+        session_payload = {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "task": "startup",
+            "phase": "COMPLETE",
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "suggested_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "recommended_actions": ["next"],
+            "write_performed": False,
+            "sync_performed": False,
+            "queries_run": [],
+            "results": [],
+            "recap_sections": {},
+            "warnings": [],
+        }
 
         monkeypatch.setattr(cli, "get_writing_sidecar_status", lambda **kwargs: status_payload)
         monkeypatch.setattr(cli, "build_writing_context", lambda **kwargs: context_payload)
         monkeypatch.setattr(cli, "doctor_writing_sidecar", lambda **kwargs: doctor_payload)
         monkeypatch.setattr(cli, "list_writing_projects", lambda *args, **kwargs: projects_payload)
+        monkeypatch.setattr(cli, "build_writing_session", lambda **kwargs: session_payload)
 
         for argv, key in (
             (["writing-sidecar", "status", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "state"),
             (["writing-sidecar", "context", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "mode"),
             (["writing-sidecar", "doctor", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "ok"),
             (["writing-sidecar", "projects", str(tmp_path), "--format", "json"], "count"),
+            (["writing-sidecar", "session", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "task"),
         ):
             monkeypatch.setattr(sys, "argv", argv)
             cli.main(sys.argv[1:])

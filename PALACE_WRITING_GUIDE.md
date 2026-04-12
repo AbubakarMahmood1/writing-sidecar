@@ -39,29 +39,26 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 
 ## Practical AI behavior
 
-- start with `writing-sidecar context --mode startup` when entering a sidecar-enabled project
-- after startup context, use `writing-sidecar maintain --kind checkpoint --write` when real work is about to begin
+- start with `writing-sidecar session --task startup` when entering a sidecar-enabled project
+- once real work begins, prefer `writing-sidecar session --task planning|prose|audit|debug|handoff|closeout --write`
 - use `writing-sidecar status` when you only need raw health / staleness
 - if stale and the task needs process memory, run `writing-sidecar sync`
-- use `writing-sidecar search --mode planning` only when `context` did not give enough planning signal
+- use `writing-sidecar search --mode planning` only when `session` or `context` did not give enough planning signal
 - use `writing-sidecar search --mode audit` for “what failed / what should stay cut”
 - use `writing-sidecar search --mode history` for “what did we already decide”
 - use `writing-sidecar search --mode research` for reference-heavy retrieval
 - use `writing-sidecar recap --mode restart` after a long break
 - use `writing-sidecar recap --mode handoff` before handing work to another assistant or another session
 - use `writing-sidecar recap --mode continuity` when the main risk is drift, obligations, or timeline confusion
-- after planning progress, refresh sidecar-safe memory with `writing-sidecar maintain --kind checkpoint --write --note "..."`
-- after audit/debug findings, use `writing-sidecar maintain --kind audit --write` and `--kind discarded --write --note "..."` when a rejected path is clear
-- before handing off, use `writing-sidecar maintain --kind handoff --write`
-- on chapter closeout, use `writing-sidecar maintain --kind closeout --write`
+- use lower-level `maintain` only when you need narrower control than `session --task ... --write`
 
 ## Startup-first flow
 
 Recommended order:
 
 1. `writing-sidecar doctor <vault-or-project> --project <name>`
-2. `writing-sidecar context <vault-or-project> --project <name> --mode startup`
-3. `writing-sidecar maintain <vault-or-project> --project <name> --kind checkpoint --write`
+2. `writing-sidecar session <vault-or-project> --project <name> --task startup`
+3. `writing-sidecar session <vault-or-project> --project <name> --task planning|prose|audit|debug|handoff|closeout --write`
 4. `writing-sidecar search ...` only if you need narrower follow-up evidence
 5. `writing-sidecar recap ...` only when you are recovering from a break, doing a handoff, or checking continuity risk
 
@@ -70,6 +67,7 @@ Recommended order:
 If another tool or assistant layer needs machine-readable output, use `--format json` on:
 
 - `status`
+- `session`
 - `context`
 - `recap`
 - `projects`

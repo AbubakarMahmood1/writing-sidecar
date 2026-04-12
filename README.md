@@ -41,6 +41,7 @@ Windows note:
 writing-sidecar init <vault-or-project> --project Witcher-DC
 writing-sidecar status <vault-or-project> --project Witcher-DC
 writing-sidecar export <vault-or-project> --project Witcher-DC
+writing-sidecar session <vault-or-project> --project Witcher-DC --task startup
 writing-sidecar context <vault-or-project> --project Witcher-DC
 writing-sidecar search <vault-or-project> --project Witcher-DC --query "Arthur sponsorship"
 writing-sidecar recap <vault-or-project> --project Witcher-DC --mode restart
@@ -53,6 +54,7 @@ writing-sidecar projects <vault>
 Structured output is available on:
 
 - `status --format json`
+- `session --format json`
 - `context --format json`
 - `recap --format json`
 - `projects --format json`
@@ -64,6 +66,7 @@ Structured output is available on:
 - tracks state in `.writing-sidecar-state.json`
 - rebuilds only when inputs actually changed
 - searches by intent instead of dumping all rooms together
+- runs a phase-aware assistant workflow with `session`
 - builds a compact startup packet for assistants with `context`
 - generates deterministic restart / handoff / continuity recaps with `recap`
 - auto-resolves the project when the input path is already inside one sidecar-enabled project
@@ -109,13 +112,15 @@ Once this package becomes your normal entrypoint, treat `mempalace-fork` as a co
 For normal project startup:
 
 1. `writing-sidecar doctor <vault-or-project> --project <name>`
-2. `writing-sidecar context <vault-or-project> --project <name> --mode startup`
+2. `writing-sidecar session <vault-or-project> --project <name> --task startup`
 3. `writing-sidecar search ...` only when you need a tighter follow-up query
 4. do the normal writing task
 
 Examples:
 
 ```bash
+writing-sidecar session C:/vault --project Witcher-DC --task startup
+writing-sidecar session C:/vault --project Witcher-DC --task planning --write
 writing-sidecar context C:/vault --project Witcher-DC --mode startup
 writing-sidecar recap C:/vault --project Witcher-DC --mode restart
 writing-sidecar maintain C:/vault --project Witcher-DC --kind checkpoint --write
@@ -124,15 +129,14 @@ writing-sidecar projects C:/vault --format json
 
 Recommended Codex operating loop:
 
-1. `writing-sidecar context <vault-or-project> --project <name> --mode startup`
-2. `writing-sidecar maintain <vault-or-project> --project <name> --kind checkpoint --write`
-3. do the actual writing / planning / audit work
-4. use `search` only for narrower follow-up evidence
-5. before handoff or closeout, use `maintain --kind handoff|audit|closeout`
+1. `writing-sidecar session <vault-or-project> --project <name> --task startup`
+2. `writing-sidecar session <vault-or-project> --project <name> --task planning|prose|audit|debug|handoff|closeout --write`
+3. use `search`, `context`, `recap`, or `maintain` only when you need narrower control
+4. keep live story-bible docs as canon and treat sidecar output as process memory only
 
 ## JSON contract
 
-When you use `--format json`, v2 keeps these top-level keys stable where they apply:
+When you use `--format json`, v4 keeps these top-level keys stable where they apply:
 
 - `project`
 - `project_root`
@@ -145,6 +149,7 @@ When you use `--format json`, v2 keeps these top-level keys stable where they ap
 Command-specific payload keys remain stable too:
 
 - `status`: `room_counts`, `config_path`, `manifest_path`, `palace_path`, `runtime_root`
+- `session`: `task`, `suggested_loadout`, `recommended_actions`, `write_performed`, `sync_performed`, `queries_run`, `results`, `recap_sections`, `warnings`
 - `context`: `mode`, `queries_run`, `results`, `warnings`, `suggested_loadout`, `recent_artifacts`
 - `recap`: `mode`, `sections`, `queries_run`, `results`, `warnings`
 - `projects`: `count`, `projects`

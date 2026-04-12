@@ -11,11 +11,13 @@ from .workflow import (
     MAINTAIN_KINDS,
     RECAP_MODES,
     SEARCH_MODE_ROOMS,
+    SESSION_TASKS,
     _ensure_dir,
     _project_wing,
     _sidecar_runtime_environment,
     build_writing_context,
     build_writing_recap,
+    build_writing_session,
     doctor_writing_sidecar,
     export_writing_corpus,
     get_writing_sidecar_status,
@@ -29,6 +31,7 @@ from .workflow import (
     print_writing_projects,
     print_writing_recap,
     print_writing_search_results,
+    print_writing_session,
     print_writing_status,
     render_writing_recap,
     scaffold_writing_sidecar,
@@ -415,6 +418,33 @@ def cmd_maintain(args):
     print_writing_maintenance(report)
 
 
+def cmd_session(args):
+    report = build_writing_session(
+        vault_dir=args.dir,
+        project=args.project,
+        out_dir=args.out,
+        codex_home=args.codex_home,
+        config_path=args.config,
+        brainstorm_paths=args.brainstorms,
+        audit_paths=args.audits,
+        discarded_paths=args.discarded_paths,
+        palace_path=args.sidecar_palace,
+        runtime_root=args.runtime_root,
+        sync=args.sync,
+        refresh_palace=args.refresh_palace,
+        task=args.task,
+        notes=args.note,
+        write=args.write,
+        n_results=args.results,
+    )
+    if args.format == "json":
+        _emit_json(report)
+        return
+    if report.get("sync_performed") and report.get("sync_summary"):
+        print_export_summary(report["sync_summary"], dry_run=False)
+    print_writing_session(report)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="writing-sidecar — standalone CDLC sidecar for MemPalace-backed process memory.",
@@ -565,6 +595,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_format_arg(p_maintain)
 
+    p_session = sub.add_parser("session", help="Run a phase-aware assistant sidecar workflow")
+    _shared_project_args(p_session)
+    p_session.add_argument(
+        "--task",
+        choices=SESSION_TASKS,
+        default="startup",
+        help="Session task to run (default: startup)",
+    )
+    p_session.add_argument(
+        "--sync",
+        choices=["always", "if-needed", "never"],
+        default="if-needed",
+        help="When to rebuild the sidecar before session work (default: if-needed)",
+    )
+    p_session.add_argument("--refresh-palace", action="store_true", help="Rebuild the target palace before mining")
+    p_session.add_argument("--write", action="store_true", help="Actually write sidecar-safe artifacts for the task")
+    p_session.add_argument(
+        "--note",
+        action="append",
+        default=[],
+        help="Additional assistant/human note to merge into sidecar-safe writes; repeat as needed",
+    )
+    p_session.add_argument("--results", type=int, default=3, help="Number of hits per session query")
+    _add_format_arg(p_session)
+
     return parser
 
 
@@ -586,6 +641,7 @@ def main(argv=None):
         "recap": cmd_recap,
         "projects": cmd_projects,
         "maintain": cmd_maintain,
+        "session": cmd_session,
     }
 
     try:

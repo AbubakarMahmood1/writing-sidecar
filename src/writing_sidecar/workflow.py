@@ -48,6 +48,7 @@ SEARCH_MODE_ROOMS = {
 CONTEXT_MODES = ("startup", "planning", "audit", "history", "research")
 RECAP_MODES = ("restart", "handoff", "continuity")
 MAINTAIN_KINDS = ("checkpoint", "audit", "handoff", "discarded", "closeout")
+SESSION_TASKS = ("startup", "planning", "prose", "audit", "debug", "handoff", "closeout")
 FIXED_ROOMS = (
     "chat_process",
     "checkpoints",
@@ -963,6 +964,110 @@ def print_writing_projects(report: dict):
     print(f"\n{'=' * 60}\n")
 
 
+def _doc_highlights_payload(doc_bundle: dict) -> dict:
+    return {
+        name: {
+            "path": payload["path"],
+            "highlights": payload["highlights"],
+        }
+        for name, payload in doc_bundle.items()
+        if payload["exists"]
+    }
+
+
+def _build_context_payload(
+    prepared: dict,
+    mode: str,
+    n_results: int,
+    *,
+    query_plan: list[dict] | None = None,
+    doc_bundle: dict | None = None,
+) -> tuple[dict, dict]:
+    status = prepared["status"]
+    doc_bundle = doc_bundle or _load_live_doc_bundle(Path(status["project_root"]))
+    query_plan = query_plan or _select_context_queries(doc_bundle, status["project"], mode)
+    warnings = list(prepared["warnings"])
+    results = _run_sidecar_queries(
+        status,
+        query_plan,
+        n_results=n_results,
+        warnings=warnings,
+        curated_for_context=True,
+    )
+    phase = _extract_phase(doc_bundle)
+
+    return doc_bundle, {
+        "project": status["project"],
+        "project_root": status["project_root"],
+        "vault_root": status["vault_root"],
+        "mode": mode,
+        "synced": prepared["synced"],
+        "sync_summary": prepared["sync_summary"],
+        "state": status["state"],
+        "stale": status["stale"],
+        "reasons": status["stale_reasons"],
+        "last_synced_at": status["last_synced_at"],
+        "phase": phase,
+        "current_chapter": _extract_field(doc_bundle, "chapter"),
+        "current_arc": _extract_field(doc_bundle, "arc"),
+        "suggested_loadout": _derive_suggested_loadout(doc_bundle, phase),
+        "queries_run": query_plan,
+        "results": results,
+        "warnings": warnings,
+        "recent_artifacts": _collect_recent_artifacts(Path(status["output_root"])),
+        "doc_highlights": _doc_highlights_payload(doc_bundle),
+        "source_priority": ["live_docs", "sidecar"],
+    }
+
+
+def _build_recap_payload(
+    prepared: dict,
+    mode: str,
+    n_results: int,
+    *,
+    query_plan: list[dict] | None = None,
+    doc_bundle: dict | None = None,
+) -> tuple[dict, dict]:
+    status = prepared["status"]
+    doc_bundle = doc_bundle or _load_live_doc_bundle(Path(status["project_root"]))
+    query_plan = query_plan or _select_recap_queries(doc_bundle, status["project"], mode)
+    warnings = list(prepared["warnings"])
+    results = _run_sidecar_queries(
+        status,
+        query_plan,
+        n_results=n_results,
+        warnings=warnings,
+        curated_for_context=True,
+    )
+    phase = _extract_phase(doc_bundle)
+
+    return doc_bundle, {
+        "project": status["project"],
+        "project_root": status["project_root"],
+        "vault_root": status["vault_root"],
+        "mode": mode,
+        "synced": prepared["synced"],
+        "sync_summary": prepared["sync_summary"],
+        "state": status["state"],
+        "stale": status["stale"],
+        "reasons": status["stale_reasons"],
+        "last_synced_at": status["last_synced_at"],
+        "phase": phase,
+        "current_chapter": _extract_field(doc_bundle, "chapter"),
+        "current_arc": _extract_field(doc_bundle, "arc"),
+        "doc_sources": {
+            name: payload["path"]
+            for name, payload in doc_bundle.items()
+            if payload["exists"]
+        },
+        "sections": _build_recap_sections(doc_bundle, results, phase, mode),
+        "queries_run": query_plan,
+        "results": results,
+        "warnings": warnings,
+        "source_priority": ["live_docs", "sidecar"],
+    }
+
+
 def build_writing_context(
     vault_dir: str,
     project: str | None = None,
@@ -996,48 +1101,8 @@ def build_writing_context(
         sync=sync,
         refresh_palace=refresh_palace,
     )
-    status = prepared["status"]
-    doc_bundle = _load_live_doc_bundle(Path(status["project_root"]))
-    query_plan = _select_context_queries(doc_bundle, status["project"], mode)
-    warnings = list(prepared["warnings"])
-    results = _run_sidecar_queries(
-        status,
-        query_plan,
-        n_results=n_results,
-        warnings=warnings,
-        curated_for_context=True,
-    )
-    phase = _extract_phase(doc_bundle)
-
-    return {
-        "project": status["project"],
-        "project_root": status["project_root"],
-        "vault_root": status["vault_root"],
-        "mode": mode,
-        "synced": prepared["synced"],
-        "sync_summary": prepared["sync_summary"],
-        "state": status["state"],
-        "stale": status["stale"],
-        "reasons": status["stale_reasons"],
-        "last_synced_at": status["last_synced_at"],
-        "phase": phase,
-        "current_chapter": _extract_field(doc_bundle, "chapter"),
-        "current_arc": _extract_field(doc_bundle, "arc"),
-        "suggested_loadout": _derive_suggested_loadout(doc_bundle, phase),
-        "queries_run": query_plan,
-        "results": results,
-        "warnings": warnings,
-        "recent_artifacts": _collect_recent_artifacts(Path(status["output_root"])),
-        "doc_highlights": {
-            name: {
-                "path": payload["path"],
-                "highlights": payload["highlights"],
-            }
-            for name, payload in doc_bundle.items()
-            if payload["exists"]
-        },
-        "source_priority": ["live_docs", "sidecar"],
-    }
+    _, context_data = _build_context_payload(prepared, mode, n_results)
+    return context_data
 
 
 def render_writing_context(context_data: dict) -> str:
@@ -1139,45 +1204,8 @@ def build_writing_recap(
         sync=sync,
         refresh_palace=refresh_palace,
     )
-    status = prepared["status"]
-    doc_bundle = _load_live_doc_bundle(Path(status["project_root"]))
-    warnings = list(prepared["warnings"])
-    query_plan = _select_recap_queries(doc_bundle, status["project"], mode)
-    results = _run_sidecar_queries(
-        status,
-        query_plan,
-        n_results=n_results,
-        warnings=warnings,
-        curated_for_context=True,
-    )
-    phase = _extract_phase(doc_bundle)
-
-    recap = {
-        "project": status["project"],
-        "project_root": status["project_root"],
-        "vault_root": status["vault_root"],
-        "mode": mode,
-        "synced": prepared["synced"],
-        "sync_summary": prepared["sync_summary"],
-        "state": status["state"],
-        "stale": status["stale"],
-        "reasons": status["stale_reasons"],
-        "last_synced_at": status["last_synced_at"],
-        "phase": phase,
-        "current_chapter": _extract_field(doc_bundle, "chapter"),
-        "current_arc": _extract_field(doc_bundle, "arc"),
-        "doc_sources": {
-            name: payload["path"]
-            for name, payload in doc_bundle.items()
-            if payload["exists"]
-        },
-        "sections": _build_recap_sections(doc_bundle, results, phase, mode),
-        "queries_run": query_plan,
-        "results": results,
-        "warnings": warnings,
-        "source_priority": ["live_docs", "sidecar"],
-    }
-    return recap
+    _, recap_data = _build_recap_payload(prepared, mode, n_results)
+    return recap_data
 
 
 def render_writing_recap(recap_data: dict) -> str:
@@ -1227,6 +1255,232 @@ def render_writing_recap(recap_data: dict) -> str:
 
 def print_writing_recap(recap_data: dict):
     print(render_writing_recap(recap_data))
+
+
+def build_writing_session(
+    vault_dir: str,
+    project: str | None = None,
+    out_dir: str = None,
+    codex_home: str = None,
+    config_path: str = None,
+    brainstorm_paths=None,
+    audit_paths=None,
+    discarded_paths=None,
+    palace_path: str = None,
+    runtime_root: str = None,
+    sync: str = "if-needed",
+    refresh_palace: bool = False,
+    task: str = "startup",
+    notes: Sequence[str] | None = None,
+    write: bool = False,
+    n_results: int = 3,
+) -> dict:
+    if task not in SESSION_TASKS:
+        raise ValueError(f"Unknown writing session task: {task}")
+
+    prepared = prepare_writing_sidecar(
+        vault_dir=vault_dir,
+        project=project,
+        out_dir=out_dir,
+        codex_home=codex_home,
+        config_path=config_path,
+        brainstorm_paths=brainstorm_paths,
+        audit_paths=audit_paths,
+        discarded_paths=discarded_paths,
+        palace_path=palace_path,
+        runtime_root=runtime_root,
+        sync=sync,
+        refresh_palace=refresh_palace,
+    )
+    status = prepared["status"]
+    project_root = status["project_root"]
+    doc_bundle = _load_live_doc_bundle(Path(project_root))
+
+    recap_sections: dict[str, list[str]] = {}
+
+    if task in {"startup", "planning", "audit"}:
+        _, base = _build_context_payload(prepared, task, n_results, doc_bundle=doc_bundle)
+    elif task in {"handoff", "closeout"}:
+        _, recap = _build_recap_payload(prepared, "handoff", n_results, doc_bundle=doc_bundle)
+        base = {
+            "project": recap["project"],
+            "project_root": recap["project_root"],
+            "vault_root": recap["vault_root"],
+            "mode": task,
+            "synced": recap["synced"],
+            "sync_summary": recap["sync_summary"],
+            "state": recap["state"],
+            "stale": recap["stale"],
+            "reasons": recap["reasons"],
+            "last_synced_at": recap["last_synced_at"],
+            "phase": recap["phase"],
+            "current_chapter": recap["current_chapter"],
+            "current_arc": recap["current_arc"],
+            "suggested_loadout": _derive_session_loadout(doc_bundle, recap["phase"], task),
+            "queries_run": recap["queries_run"],
+            "results": recap["results"],
+            "warnings": recap["warnings"],
+            "recent_artifacts": _collect_recent_artifacts(Path(status["output_root"])),
+            "doc_highlights": _doc_highlights_payload(doc_bundle),
+            "recap_sections": recap["sections"],
+            "source_priority": recap["source_priority"],
+        }
+    else:
+        query_plan = _select_session_queries(doc_bundle, status["project"], task)
+        _, base = _build_context_payload(
+            prepared,
+            task,
+            n_results,
+            query_plan=query_plan,
+            doc_bundle=doc_bundle,
+        )
+        base["suggested_loadout"] = _derive_session_loadout(doc_bundle, base["phase"], task)
+        if task == "prose":
+            recap_sections = _build_prose_session_sections(doc_bundle, base["results"])
+            base["recap_sections"] = recap_sections
+
+    if task in {"startup", "planning", "audit"}:
+        base["suggested_loadout"] = _derive_session_loadout(doc_bundle, base["phase"], task)
+    if task not in {"handoff", "closeout"}:
+        base.setdefault("recap_sections", recap_sections)
+
+    write_reports = []
+    if write:
+        write_reports = _perform_session_writes(
+            task=task,
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            sync=sync,
+            notes=notes,
+            results=base["results"],
+        )
+
+    final_status = base
+    if write_reports:
+        final_report = write_reports[-1]
+        final_status = {
+            **base,
+            "state": final_report["state"],
+            "stale": final_report["stale"],
+            "reasons": final_report["reasons"],
+            "last_synced_at": final_report["last_synced_at"],
+            "warnings": _unique_lines(base["warnings"] + final_report["warnings"]),
+        }
+    else:
+        final_status = {**base, "warnings": _unique_lines(base["warnings"])}
+
+    project_root_path = Path(project_root)
+    output_root = Path(status["output_root"])
+    final_status["task"] = task
+    final_status["recommended_actions"] = _build_session_recommended_actions(
+        task=task,
+        project_root=project_root_path,
+        doc_bundle=doc_bundle,
+        phase=final_status["phase"],
+        suggested_loadout=final_status.get("suggested_loadout", []),
+        results=final_status.get("results", []),
+        write=write,
+        notes=notes or [],
+    )
+    final_status["write_performed"] = bool(write_reports)
+    final_status["paths_written"] = [
+        path for report in write_reports for path in report.get("paths_written", [])
+    ]
+    final_status["sync_performed"] = bool(prepared["synced"] or any(report.get("sync_performed") for report in write_reports))
+    final_status["sync_summary"] = next(
+        (report.get("sync_summary") for report in reversed(write_reports) if report.get("sync_summary")),
+        base.get("sync_summary"),
+    )
+    final_status["generated_sections"] = {
+        key: value
+        for report in write_reports
+        for key, value in report.get("generated_sections", {}).items()
+    }
+    final_status["source_inputs"] = [
+        item
+        for report in write_reports
+        for item in report.get("source_inputs", [])
+    ]
+    final_status["recent_artifacts"] = _collect_recent_artifacts(output_root)
+    final_status["doc_highlights"] = _doc_highlights_payload(doc_bundle)
+    final_status["source_priority"] = ["live_docs", "sidecar"]
+
+    return final_status
+
+
+def render_writing_session(session_data: dict) -> str:
+    lines = [
+        "",
+        "=" * 60,
+        f"  Writing Sidecar Session ({session_data['task']})",
+        "=" * 60,
+        f"  Project: {session_data['project_root']}",
+        f"  State:   {session_data['state'].upper()}",
+    ]
+    if session_data.get("phase"):
+        lines.append(f"  Phase:   {session_data['phase']}")
+    if session_data.get("current_chapter"):
+        lines.append(f"  Chapter: {session_data['current_chapter']}")
+    if session_data.get("current_arc"):
+        lines.append(f"  Arc:     {session_data['current_arc']}")
+    if session_data.get("last_synced_at"):
+        lines.append(f"  Synced:  {session_data['last_synced_at']}")
+
+    if session_data.get("warnings"):
+        lines.append("\n  Warnings:")
+        for warning in session_data["warnings"]:
+            lines.append(f"    - {warning}")
+
+    if session_data.get("recommended_actions"):
+        lines.append("\n  Recommended actions:")
+        for action in session_data["recommended_actions"]:
+            lines.append(f"    - {action}")
+
+    if session_data.get("suggested_loadout"):
+        lines.append("\n  Suggested loadout:")
+        for item in session_data["suggested_loadout"]:
+            lines.append(f"    - {item}")
+
+    if session_data.get("recap_sections"):
+        for title, items in session_data["recap_sections"].items():
+            lines.append(f"\n  {title}:")
+            if not items:
+                lines.append("    - none")
+                continue
+            for item in items:
+                lines.append(f"    - {item}")
+
+    if session_data.get("paths_written"):
+        lines.append("\n  Paths written:")
+        for path in session_data["paths_written"]:
+            lines.append(f"    - {path}")
+
+    if session_data.get("results"):
+        lines.append("\n  Sidecar evidence:")
+        for packet in session_data["results"]:
+            lines.append(f'    {packet["mode"]} -> "{packet["query"]}"')
+            if not packet.get("results"):
+                lines.append("      - no hits")
+                continue
+            for hit in packet["results"][:3]:
+                lines.append(
+                    f"      - {hit.get('room', '?')}: {hit.get('source_file', '?')} :: {_preview_text(hit.get('text', ''))}"
+                )
+
+    lines.extend(["", "=" * 60, ""])
+    return "\n".join(lines)
+
+
+def print_writing_session(session_data: dict):
+    print(render_writing_session(session_data))
 
 
 def maintain_writing_sidecar(
@@ -1392,6 +1646,146 @@ def render_writing_maintenance(report: dict) -> str:
 
 def print_writing_maintenance(report: dict):
     print(render_writing_maintenance(report))
+
+
+def _build_prose_session_sections(doc_bundle: dict, results: list[dict]) -> dict[str, list[str]]:
+    continuity_watch = _unique_lines(
+        _section_from_docs(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes", "story_so_far"),
+            section_keywords=("threads carried forward", "continuity closeout", "locked decisions", "next start point"),
+            keywords=("thread", "carry", "watch", "risk", "timeline", "continuity", "obligation"),
+            max_items=5,
+        )
+        + _extract_story_memory_evidence(results, max_items=3)
+    )
+    if not continuity_watch:
+        return {}
+    return {"Continuity Watch": continuity_watch}
+
+
+def _session_command(project_root: Path, task: str, *, write: bool = False) -> str:
+    command = f'writing-sidecar session "{project_root}" --task {task}'
+    if write:
+        command += " --write"
+    return command
+
+
+def _build_session_recommended_actions(
+    *,
+    task: str,
+    project_root: Path,
+    doc_bundle: dict,
+    phase: str | None,
+    suggested_loadout: Sequence[str],
+    results: list[dict],
+    write: bool,
+    notes: Sequence[str],
+) -> list[str]:
+    actions = []
+    followup_task = _infer_followup_session_task(doc_bundle, phase)
+    rejected_evidence = bool(notes or _extract_rejected_path_evidence(results, max_items=1))
+
+    if suggested_loadout:
+        actions.append("Open the suggested loadout before continuing.")
+
+    if task == "startup":
+        if not write:
+            actions.append(f"Run `{_session_command(project_root, 'startup', write=True)}` once real work begins.")
+        actions.append(f"Continue with `{_session_command(project_root, followup_task, write=True)}` when you move into the next real task.")
+        actions.append("Use lower-level `search`, `context`, or `recap` only when the session packet is too broad or too thin.")
+    elif task == "planning":
+        if not write:
+            actions.append(f"Run `{_session_command(project_root, 'planning', write=True)}` to checkpoint the current planning state.")
+        actions.append("Keep live story-bible docs as canon; use sidecar hits only to explain prior decisions, pressure, and rejected options.")
+        actions.append("Use `writing-sidecar search --mode planning` only when you need narrower follow-up evidence.")
+    elif task == "prose":
+        if not write:
+            actions.append(f"Run `{_session_command(project_root, 'prose', write=True)}` when drafting starts or when the prose direction materially changes.")
+        actions.append("Draft from live docs first and treat the continuity watch as advisory guardrails.")
+        actions.append(f"Move to `{_session_command(project_root, 'audit')}` once the prose pass exists.")
+    elif task == "audit":
+        if not write:
+            actions.append(f"Run `{_session_command(project_root, 'audit', write=True)}` to capture the audit state in sidecar-safe form.")
+        actions.append(f"Move to `{_session_command(project_root, 'debug', write=True)}` when the dominant failure is clear.")
+    elif task == "debug":
+        if not write:
+            actions.append(f"Run `{_session_command(project_root, 'debug', write=True)}` to preserve the repair pass.")
+        if not rejected_evidence:
+            actions.append("Add `--note \"...\"` if you reject a concrete structure and want it preserved in discarded_paths.")
+        actions.append(f"Return to `{_session_command(project_root, 'audit')}` after the dominant failure is repaired.")
+    elif task == "handoff":
+        if not write:
+            actions.append(f"Run `{_session_command(project_root, 'handoff', write=True)}` to refresh the handoff artifact before session end.")
+        actions.append(f"Next session should start with `{_session_command(project_root, 'startup')}`.")
+    elif task == "closeout":
+        if not write:
+            actions.append(f"Run `{_session_command(project_root, 'closeout', write=True)}` to archive the checkpoint, audit, and handoff bundle.")
+        actions.append(f"Next session should start with `{_session_command(project_root, 'startup')}`.")
+
+    return actions
+
+
+def _perform_session_writes(
+    *,
+    task: str,
+    vault_dir: str,
+    project: str | None,
+    out_dir: str | None,
+    codex_home: str | None,
+    config_path: str | None,
+    brainstorm_paths,
+    audit_paths,
+    discarded_paths,
+    palace_path: str | None,
+    runtime_root: str | None,
+    sync: str,
+    notes: Sequence[str] | None,
+    results: list[dict],
+) -> list[dict]:
+    kwargs = {
+        "vault_dir": vault_dir,
+        "project": project,
+        "out_dir": out_dir,
+        "codex_home": codex_home,
+        "config_path": config_path,
+        "brainstorm_paths": brainstorm_paths,
+        "audit_paths": audit_paths,
+        "discarded_paths": discarded_paths,
+        "palace_path": palace_path,
+        "runtime_root": runtime_root,
+        "notes": notes,
+        "write": True,
+    }
+
+    if task in {"startup", "planning", "prose"}:
+        return [maintain_writing_sidecar(kind="checkpoint", sync=sync, **kwargs)]
+    if task == "audit":
+        return [maintain_writing_sidecar(kind="audit", sync=sync, **kwargs)]
+    if task == "handoff":
+        return [maintain_writing_sidecar(kind="handoff", sync=sync, **kwargs)]
+    if task == "closeout":
+        return [maintain_writing_sidecar(kind="closeout", sync=sync, **kwargs)]
+    if task == "debug":
+        reports = []
+        should_write_discarded = bool(notes or _extract_rejected_path_evidence(results, max_items=1))
+        reports.append(
+            maintain_writing_sidecar(
+                kind="audit",
+                sync="never" if should_write_discarded else sync,
+                **kwargs,
+            )
+        )
+        if should_write_discarded:
+            reports.append(
+                maintain_writing_sidecar(
+                    kind="discarded",
+                    sync=sync,
+                    **kwargs,
+                )
+            )
+        return reports
+    return []
 
 
 def _clean_note_list(notes: Sequence[str]) -> list[str]:
@@ -2345,6 +2739,24 @@ def _select_recap_queries(doc_bundle: dict, project: str, mode: str) -> list[dic
     ]
 
 
+def _select_session_queries(doc_bundle: dict, project: str, task: str) -> list[dict]:
+    if task == "prose":
+        planning_query = _collect_mode_queries(doc_bundle, project, "planning")[0]
+        history_query = _collect_mode_queries(doc_bundle, project, "history")[0]
+        return [
+            {"mode": "planning", "query": planning_query},
+            {"mode": "history", "query": history_query},
+        ]
+    if task == "debug":
+        audit_query = _collect_mode_queries(doc_bundle, project, "audit")[0]
+        history_query = _collect_mode_queries(doc_bundle, project, "history")[0]
+        return [
+            {"mode": "audit", "query": audit_query},
+            {"mode": "history", "query": history_query},
+        ]
+    raise ValueError(f"Unknown writing session query task: {task}")
+
+
 def _collect_mode_queries(doc_bundle: dict, project: str, mode: str) -> list[str]:
     mode_specs = {
         "planning": {
@@ -2574,6 +2986,39 @@ def _derive_suggested_loadout(doc_bundle: dict, phase: str | None) -> list[str]:
     if explicit:
         return explicit
     return PHASE_LOADOUT.get(target_phase or "", PHASE_LOADOUT.get(phase or "", []))
+
+
+def _derive_session_loadout(doc_bundle: dict, phase: str | None, task: str) -> list[str]:
+    if task == "startup":
+        return _derive_suggested_loadout(doc_bundle, phase)
+
+    target_phase = {
+        "planning": "SCRIPTING",
+        "prose": "PROSE",
+        "audit": "AUDIT",
+        "debug": "DEBUG",
+        "handoff": _derive_target_phase(doc_bundle, phase) or phase,
+        "closeout": "COMPLETE",
+    }.get(task, phase)
+    explicit = _extract_recommended_loadout(doc_bundle, target_phase)
+    if explicit:
+        return explicit
+    return PHASE_LOADOUT.get(target_phase or "", PHASE_LOADOUT.get(phase or "", []))
+
+
+def _infer_followup_session_task(doc_bundle: dict, phase: str | None) -> str:
+    target_phase = _derive_target_phase(doc_bundle, phase)
+    if target_phase in {"BRAINDUMP", "SCRIPTING", "STAGING"}:
+        return "planning"
+    if target_phase == "PROSE":
+        return "prose"
+    if target_phase == "AUDIT":
+        return "audit"
+    if target_phase == "DEBUG":
+        return "debug"
+    if phase == "COMPLETE":
+        return "closeout"
+    return "planning"
 
 
 def _collect_recent_artifacts(output_root: Path, limit: int = 5) -> list[dict]:
