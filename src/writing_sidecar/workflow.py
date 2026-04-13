@@ -48,7 +48,18 @@ SEARCH_MODE_ROOMS = {
 CONTEXT_MODES = ("startup", "planning", "audit", "history", "research")
 RECAP_MODES = ("restart", "handoff", "continuity")
 MAINTAIN_KINDS = ("checkpoint", "audit", "handoff", "discarded", "closeout")
-SESSION_TASKS = ("startup", "planning", "prose", "audit", "debug", "handoff", "closeout")
+SESSION_TASKS = (
+    "startup",
+    "braindump",
+    "scripting",
+    "staging",
+    "planning",
+    "prose",
+    "audit",
+    "debug",
+    "handoff",
+    "closeout",
+)
 FIXED_ROOMS = (
     "chat_process",
     "checkpoints",
@@ -906,6 +917,93 @@ def print_writing_search_results(search_data: dict):
     print()
 
 
+def _workflow_check_specs() -> list[dict]:
+    return [
+        {"name": "writing_sidecar_config", "path": Path("writing-sidecar.yaml"), "required": True, "kind": "file"},
+        {"name": "agents_gateway", "path": Path("AGENTS.md"), "required": False, "kind": "file"},
+        {"name": "current_notes", "path": Path("_story_bible") / "05_Current_Notes.md", "required": True, "kind": "file"},
+        {
+            "name": "current_chapter_notes",
+            "path": Path("_story_bible") / "05_Current_Chapter_Notes.md",
+            "required": True,
+            "kind": "file",
+        },
+        {"name": "logs_checkpoints", "path": Path("logs") / "checkpoints", "required": True, "kind": "dir"},
+        {"name": "logs_brainstorms", "path": Path("logs") / "brainstorms", "required": True, "kind": "dir"},
+        {"name": "logs_audits", "path": Path("logs") / "audits", "required": True, "kind": "dir"},
+        {"name": "logs_discarded_paths", "path": Path("logs") / "discarded_paths", "required": True, "kind": "dir"},
+        {
+            "name": "template_checkpoint",
+            "path": Path("logs") / "templates" / "checkpoint_snapshot.md",
+            "required": True,
+            "kind": "file",
+        },
+        {
+            "name": "template_handoff",
+            "path": Path("logs") / "templates" / "chapter_handoff.md",
+            "required": True,
+            "kind": "file",
+        },
+        {
+            "name": "template_audit",
+            "path": Path("logs") / "templates" / "audit_snapshot.md",
+            "required": True,
+            "kind": "file",
+        },
+        {
+            "name": "template_discarded",
+            "path": Path("logs") / "templates" / "discarded_path.md",
+            "required": True,
+            "kind": "file",
+        },
+    ]
+
+
+def _collect_workflow_checks(project_root: Path) -> list[dict]:
+    checks = []
+    for spec in _workflow_check_specs():
+        target = project_root / spec["path"]
+        exists = target.is_dir() if spec["kind"] == "dir" else target.is_file()
+        checks.append(
+            {
+                "name": spec["name"],
+                "status": "ok"
+                if exists
+                else ("fail" if spec["required"] else "warn"),
+                "path": str(target),
+                "detail": (
+                    "Present."
+                    if exists
+                    else (
+                        "Missing required workflow asset."
+                        if spec["required"]
+                        else "Missing recommended workflow asset."
+                    )
+                ),
+            }
+        )
+    return checks
+
+
+def _assistant_ready(workflow_checks: Sequence[dict]) -> bool:
+    return not any(item["status"] == "fail" for item in workflow_checks)
+
+
+def _last_checkpoint_at(project_root: Path) -> str | None:
+    checkpoint_root = project_root / "logs" / "checkpoints"
+    if not checkpoint_root.exists():
+        return None
+    latest: float | None = None
+    for path in checkpoint_root.rglob("*"):
+        if not path.is_file():
+            continue
+        stamp = path.stat().st_mtime
+        latest = stamp if latest is None else max(latest, stamp)
+    if latest is None:
+        return None
+    return datetime.fromtimestamp(latest, tz=timezone.utc).replace(microsecond=0).isoformat()
+
+
 def list_writing_projects(vault_dir: str) -> dict:
     base_path = Path(vault_dir).expanduser().resolve()
     if base_path.is_file():
@@ -917,6 +1015,9 @@ def list_writing_projects(vault_dir: str) -> dict:
             vault_dir=str(candidate["project_root"]),
             project=candidate["project"],
         )
+        doc_bundle = _load_live_doc_bundle(Path(status["project_root"]))
+        operative_phase = _derive_operative_phase(doc_bundle, _extract_phase(doc_bundle))
+        workflow_checks = _collect_workflow_checks(Path(status["project_root"]))
         projects.append(
             {
                 "project": status["project"],
@@ -925,6 +1026,10 @@ def list_writing_projects(vault_dir: str) -> dict:
                 "state": status["state"],
                 "stale": status["stale"],
                 "last_synced_at": status["last_synced_at"],
+                "last_checkpoint_at": _last_checkpoint_at(Path(status["project_root"])),
+                "operative_phase": operative_phase,
+                "next_action": _extract_field(doc_bundle, "next_action"),
+                "assistant_ready": _assistant_ready(workflow_checks),
                 "room_counts": status.get("room_counts", {}),
                 "reasons": status.get("stale_reasons", []),
             }
@@ -952,8 +1057,15 @@ def print_writing_projects(report: dict):
         print(f"\n  {item['project']} [{item['state'].upper()}]")
         print(f"    Root:   {item['project_root']}")
         print(f"    Config: {item['config_path']}")
+        if item.get("operative_phase"):
+            print(f"    Phase:  {item['operative_phase']}")
+        if item.get("next_action"):
+            print(f"    Next:   {item['next_action']}")
+        print(f"    Ready:  {'YES' if item.get('assistant_ready') else 'NO'}")
         if item.get("last_synced_at"):
             print(f"    Synced: {item['last_synced_at']}")
+        if item.get("last_checkpoint_at"):
+            print(f"    Checkpoint: {item['last_checkpoint_at']}")
         if item.get("reasons"):
             print("    Reasons:")
             for reason in item["reasons"]:
@@ -1295,10 +1407,12 @@ def build_writing_session(
     status = prepared["status"]
     project_root = status["project_root"]
     doc_bundle = _load_live_doc_bundle(Path(project_root))
+    raw_phase = _extract_phase(doc_bundle)
+    operative_phase = _derive_operative_phase(doc_bundle, raw_phase)
 
     recap_sections: dict[str, list[str]] = {}
 
-    if task in {"startup", "planning", "audit"}:
+    if task == "startup":
         _, base = _build_context_payload(prepared, task, n_results, doc_bundle=doc_bundle)
     elif task in {"handoff", "closeout"}:
         _, recap = _build_recap_payload(prepared, "handoff", n_results, doc_bundle=doc_bundle)
@@ -1334,13 +1448,13 @@ def build_writing_session(
             query_plan=query_plan,
             doc_bundle=doc_bundle,
         )
-        base["suggested_loadout"] = _derive_session_loadout(doc_bundle, base["phase"], task)
         if task == "prose":
             recap_sections = _build_prose_session_sections(doc_bundle, base["results"])
             base["recap_sections"] = recap_sections
 
-    if task in {"startup", "planning", "audit"}:
-        base["suggested_loadout"] = _derive_session_loadout(doc_bundle, base["phase"], task)
+    base["phase"] = raw_phase
+    base["operative_phase"] = operative_phase
+    base["suggested_loadout"] = _derive_session_loadout(doc_bundle, raw_phase, task, operative_phase)
     if task not in {"handoff", "closeout"}:
         base.setdefault("recap_sections", recap_sections)
 
@@ -1379,13 +1493,35 @@ def build_writing_session(
 
     project_root_path = Path(project_root)
     output_root = Path(status["output_root"])
+    doc_loadout = list(final_status.get("suggested_loadout", []))
     final_status["task"] = task
+    final_status["doc_loadout"] = doc_loadout
+    final_status["file_targets"] = _resolve_session_file_targets(project_root_path, doc_bundle, doc_loadout)
+    final_status["continuity_watch"] = _build_session_continuity_watch(doc_bundle, final_status.get("results", []), task)
+    final_status["phase_guardrails"] = _session_phase_guardrails(task, operative_phase)
+    final_status["done_criteria"] = _session_done_criteria(task, operative_phase)
+    final_status["artifact_targets"] = _predict_session_artifact_targets(
+        task=task,
+        status=status,
+        doc_bundle=doc_bundle,
+        notes=notes or [],
+        results=final_status.get("results", []),
+    )
+    final_status["recommended_commands"] = _build_session_recommended_commands(
+        task=task,
+        project_root=project_root_path,
+        operative_phase=operative_phase,
+        write=write,
+        notes=notes or [],
+        results=final_status.get("results", []),
+    )
     final_status["recommended_actions"] = _build_session_recommended_actions(
         task=task,
         project_root=project_root_path,
         doc_bundle=doc_bundle,
+        operative_phase=operative_phase,
         phase=final_status["phase"],
-        suggested_loadout=final_status.get("suggested_loadout", []),
+        suggested_loadout=doc_loadout,
         results=final_status.get("results", []),
         write=write,
         notes=notes or [],
@@ -1427,6 +1563,8 @@ def render_writing_session(session_data: dict) -> str:
     ]
     if session_data.get("phase"):
         lines.append(f"  Phase:   {session_data['phase']}")
+    if session_data.get("operative_phase"):
+        lines.append(f"  Active:  {session_data['operative_phase']}")
     if session_data.get("current_chapter"):
         lines.append(f"  Chapter: {session_data['current_chapter']}")
     if session_data.get("current_arc"):
@@ -1447,6 +1585,36 @@ def render_writing_session(session_data: dict) -> str:
     if session_data.get("suggested_loadout"):
         lines.append("\n  Suggested loadout:")
         for item in session_data["suggested_loadout"]:
+            lines.append(f"    - {item}")
+
+    if session_data.get("file_targets"):
+        lines.append("\n  File targets:")
+        for item in session_data["file_targets"]:
+            lines.append(f"    - {item}")
+
+    if session_data.get("continuity_watch"):
+        lines.append("\n  Continuity watch:")
+        for item in session_data["continuity_watch"]:
+            lines.append(f"    - {item}")
+
+    if session_data.get("phase_guardrails"):
+        lines.append("\n  Phase guardrails:")
+        for item in session_data["phase_guardrails"]:
+            lines.append(f"    - {item}")
+
+    if session_data.get("done_criteria"):
+        lines.append("\n  Done criteria:")
+        for item in session_data["done_criteria"]:
+            lines.append(f"    - {item}")
+
+    if session_data.get("recommended_commands"):
+        lines.append("\n  Recommended commands:")
+        for item in session_data["recommended_commands"]:
+            lines.append(f"    - {item}")
+
+    if session_data.get("artifact_targets"):
+        lines.append("\n  Artifact targets:")
+        for item in session_data["artifact_targets"]:
             lines.append(f"    - {item}")
 
     if session_data.get("recap_sections"):
@@ -1664,6 +1832,73 @@ def _build_prose_session_sections(doc_bundle: dict, results: list[dict]) -> dict
     return {"Continuity Watch": continuity_watch}
 
 
+def _build_session_continuity_watch(doc_bundle: dict, results: list[dict], task: str) -> list[str]:
+    doc_items = _section_from_docs(
+        doc_bundle,
+        ("current_chapter_notes", "current_notes", "story_so_far"),
+        section_keywords=("threads carried forward", "continuity closeout", "watch out", "open work", "next start point"),
+        keywords=("thread", "carry", "watch", "risk", "timeline", "continuity", "obligation", "guardrail"),
+        max_items=6,
+    )
+    if task in {"audit", "debug"}:
+        doc_items = _section_from_docs(
+            doc_bundle,
+            ("current_chapter_notes", "current_notes"),
+            section_keywords=("final checklist", "audit log", "open work", "watch out"),
+            keywords=("risk", "problem", "watch", "repeat", "continuity", "drift"),
+            max_items=6,
+        ) + doc_items
+    return _unique_lines(doc_items + _extract_story_memory_evidence(results, max_items=3))
+
+
+def _resolve_session_file_targets(
+    project_root: Path,
+    doc_bundle: dict,
+    loadout: Sequence[str],
+    *,
+    limit: int = 8,
+) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+
+    def add_path(path: Path):
+        resolved = str(path.resolve())
+        if resolved in seen or not path.exists() or not path.is_file():
+            return
+        seen.add(resolved)
+        targets.append(resolved)
+
+    for item in loadout:
+        cleaned = _clean_highlight_line(item)
+        if not cleaned:
+            continue
+        if cleaned.startswith("_story_bible/"):
+            add_path(project_root / cleaned.replace("/", os.sep))
+        elif cleaned.endswith(".md") or cleaned.endswith(".txt"):
+            add_path(project_root / cleaned.replace("/", os.sep))
+        if len(targets) >= limit:
+            return targets
+
+    for doc_name in ("current_notes", "current_chapter_notes", "story_so_far"):
+        payload = doc_bundle.get(doc_name, {})
+        if payload.get("exists"):
+            add_path(Path(payload["path"]))
+        if len(targets) >= limit:
+            return targets
+
+    return targets
+
+
+def _resolved_session_packet_task(task: str, operative_phase: str | None) -> str:
+    if task == "startup":
+        return _session_task_for_phase(operative_phase)
+    if task == "planning":
+        precise = _session_task_for_phase(operative_phase)
+        if precise in {"braindump", "scripting", "staging"}:
+            return precise
+    return task
+
+
 def _session_command(project_root: Path, task: str, *, write: bool = False) -> str:
     command = f'writing-sidecar session "{project_root}" --task {task}'
     if write:
@@ -1671,11 +1906,90 @@ def _session_command(project_root: Path, task: str, *, write: bool = False) -> s
     return command
 
 
+def _build_session_recommended_commands(
+    *,
+    task: str,
+    project_root: Path,
+    operative_phase: str | None,
+    write: bool,
+    notes: Sequence[str],
+    results: list[dict],
+) -> list[str]:
+    commands: list[str] = []
+    precise_task = _resolved_session_packet_task(task, operative_phase)
+    followup_task = _session_task_for_phase(operative_phase)
+    rejected_evidence = bool(notes or _extract_rejected_path_evidence(results, max_items=1))
+
+    if task == "startup":
+        if not write:
+            commands.append(_session_command(project_root, "startup", write=True))
+        next_task = followup_task if followup_task not in {"closeout", "planning"} else "planning"
+        commands.append(_session_command(project_root, next_task, write=True))
+        return _unique_lines(commands)
+
+    if precise_task in {"braindump", "scripting", "staging"}:
+        if not write:
+            commands.append(_session_command(project_root, task, write=True))
+        next_map = {
+            "braindump": "scripting",
+            "scripting": "staging",
+            "staging": "prose",
+        }
+        commands.append(_session_command(project_root, next_map[precise_task], write=False))
+        return _unique_lines(commands)
+
+    if task == "planning":
+        if not write:
+            commands.append(_session_command(project_root, "planning", write=True))
+        if precise_task != "planning":
+            commands.append(_session_command(project_root, precise_task, write=True))
+        else:
+            commands.append(_session_command(project_root, "prose", write=False))
+        return _unique_lines(commands)
+
+    if task == "prose":
+        if not write:
+            commands.append(_session_command(project_root, "prose", write=True))
+        commands.append(_session_command(project_root, "audit", write=False))
+        return _unique_lines(commands)
+
+    if task == "audit":
+        if not write:
+            commands.append(_session_command(project_root, "audit", write=True))
+        commands.append(_session_command(project_root, "debug", write=True))
+        return _unique_lines(commands)
+
+    if task == "debug":
+        if not write:
+            commands.append(_session_command(project_root, "debug", write=True))
+        if not rejected_evidence:
+            commands.append(
+                f'writing-sidecar session "{project_root}" --task debug --write --note "rejected path summary"'
+            )
+        commands.append(_session_command(project_root, "audit", write=False))
+        return _unique_lines(commands)
+
+    if task == "handoff":
+        if not write:
+            commands.append(_session_command(project_root, "handoff", write=True))
+        commands.append(_session_command(project_root, "startup", write=False))
+        return _unique_lines(commands)
+
+    if task == "closeout":
+        if not write:
+            commands.append(_session_command(project_root, "closeout", write=True))
+        commands.append(_session_command(project_root, "startup", write=False))
+        return _unique_lines(commands)
+
+    return _unique_lines(commands)
+
+
 def _build_session_recommended_actions(
     *,
     task: str,
     project_root: Path,
     doc_bundle: dict,
+    operative_phase: str | None,
     phase: str | None,
     suggested_loadout: Sequence[str],
     results: list[dict],
@@ -1683,20 +1997,34 @@ def _build_session_recommended_actions(
     notes: Sequence[str],
 ) -> list[str]:
     actions = []
-    followup_task = _infer_followup_session_task(doc_bundle, phase)
+    followup_task = _session_task_for_phase(operative_phase)
     rejected_evidence = bool(notes or _extract_rejected_path_evidence(results, max_items=1))
+    precise_task = _resolved_session_packet_task(task, operative_phase)
 
     if suggested_loadout:
         actions.append("Open the suggested loadout before continuing.")
 
     if task == "startup":
+        next_task = followup_task if followup_task != "closeout" else "planning"
         if not write:
             actions.append(f"Run `{_session_command(project_root, 'startup', write=True)}` once real work begins.")
-        actions.append(f"Continue with `{_session_command(project_root, followup_task, write=True)}` when you move into the next real task.")
+        actions.append(f"Continue with `{_session_command(project_root, next_task, write=True)}` when you move into the next real task.")
         actions.append("Use lower-level `search`, `context`, or `recap` only when the session packet is too broad or too thin.")
+    elif precise_task in {"braindump", "scripting", "staging"}:
+        if not write:
+            actions.append(f"Run `{_session_command(project_root, task, write=True)}` to preserve the current phase state.")
+        next_map = {
+            "braindump": "scripting",
+            "scripting": "staging",
+            "staging": "prose",
+        }
+        actions.append(f"Move to `{_session_command(project_root, next_map[precise_task], write=False)}` once this phase is actually stable.")
+        actions.append("Keep live docs authoritative and use sidecar evidence only to preserve process memory and rejected options.")
     elif task == "planning":
         if not write:
             actions.append(f"Run `{_session_command(project_root, 'planning', write=True)}` to checkpoint the current planning state.")
+        if precise_task != "planning":
+            actions.append(f"The docs point to `{_session_command(project_root, precise_task, write=False)}` as the more exact next phase.")
         actions.append("Keep live story-bible docs as canon; use sidecar hits only to explain prior decisions, pressure, and rejected options.")
         actions.append("Use `writing-sidecar search --mode planning` only when you need narrower follow-up evidence.")
     elif task == "prose":
@@ -1758,7 +2086,7 @@ def _perform_session_writes(
         "write": True,
     }
 
-    if task in {"startup", "planning", "prose"}:
+    if task in {"startup", "braindump", "scripting", "staging", "planning", "prose"}:
         return [maintain_writing_sidecar(kind="checkpoint", sync=sync, **kwargs)]
     if task == "audit":
         return [maintain_writing_sidecar(kind="audit", sync=sync, **kwargs)]
@@ -1833,6 +2161,74 @@ def _resolve_chapter_number(
             if number is not None:
                 chapter_numbers.add(number)
     return max(chapter_numbers) if chapter_numbers else None
+
+
+def _predict_session_artifact_targets(
+    *,
+    task: str,
+    status: dict,
+    doc_bundle: dict,
+    notes: Sequence[str],
+    results: list[dict],
+) -> list[str]:
+    chapter_number = _resolve_chapter_number(Path(status["project_root"]), doc_bundle, None)
+    if chapter_number is None:
+        return []
+
+    kinds: list[str]
+    if task in {"startup", "braindump", "scripting", "staging", "planning", "prose"}:
+        kinds = ["checkpoint"]
+    elif task == "audit":
+        kinds = ["audit"]
+    elif task == "debug":
+        kinds = ["audit"]
+        if notes or _extract_rejected_path_evidence(results, max_items=1):
+            kinds.append("discarded")
+    elif task == "handoff":
+        kinds = ["handoff"]
+    elif task == "closeout":
+        kinds = ["checkpoint", "audit", "handoff"]
+        if notes:
+            kinds.append("discarded")
+    else:
+        kinds = []
+
+    project_root = Path(status["project_root"])
+    date_stamp = datetime.now().astimezone().strftime("%Y-%m-%d")
+    next_action = _extract_field(doc_bundle, "next_action") or ""
+    working_title = _extract_field(doc_bundle, "working_title") or ""
+
+    paths: list[str] = []
+    for kind in kinds:
+        if kind == "checkpoint":
+            path = _resolve_artifact_path(
+                project_root / "logs" / "checkpoints",
+                f"*_chapter-{chapter_number}_*_checkpoint.md",
+                f"{date_stamp}_chapter-{chapter_number}_session_checkpoint.md",
+            )
+        elif kind == "audit":
+            path = _resolve_artifact_path(
+                project_root / "logs" / "audits",
+                f"*_chapter-{chapter_number}_closeout_audit.md",
+                f"{date_stamp}_chapter-{chapter_number}_closeout_audit.md",
+            )
+        elif kind == "handoff":
+            next_chapter = chapter_number + 1
+            chosen_slug = _artifact_slug(working_title or next_action, fallback="handoff")
+            path = _resolve_artifact_path(
+                project_root / "logs" / "brainstorms",
+                f"*_chapter-{next_chapter}_*_handoff.md",
+                f"{date_stamp}_chapter-{next_chapter}_{chosen_slug}_handoff.md",
+            )
+        else:
+            chosen_slug = _artifact_slug(next_action, fallback="discarded")
+            path = _resolve_artifact_path(
+                project_root / "logs" / "discarded_paths",
+                f"*_chapter-{chapter_number}_*_discarded.md",
+                f"{date_stamp}_chapter-{chapter_number}_{chosen_slug}_discarded.md",
+            )
+        paths.append(str(path))
+    return paths
 
 
 def _extract_numeric_chapter(value: str | None) -> int | None:
@@ -2599,7 +2995,7 @@ def _extract_field(doc_bundle: dict, field_name: str) -> str | None:
             value = entry.get("value")
             if value:
                 return value
-        text = doc_bundle[doc_name]["text"]
+        text = payload.get("text", "")
         if not text:
             continue
         for raw_line in text.splitlines():
@@ -2740,12 +3136,106 @@ def _select_recap_queries(doc_bundle: dict, project: str, mode: str) -> list[dic
 
 
 def _select_session_queries(doc_bundle: dict, project: str, task: str) -> list[dict]:
+    if task == "braindump":
+        return [
+            {
+                "mode": "planning",
+                "query": _pick_signal_query(
+                    doc_bundle,
+                    ("current_notes", "current_chapter_notes"),
+                    section_keywords=("what is still open", "active risks", "current priorities", "keep move later"),
+                    field_names=("next_action", "status"),
+                    keywords=("open", "risk", "priority", "idea", "pressure", "question", "next"),
+                )
+                or _fallback_query(project, "planning"),
+            },
+            {
+                "mode": "history",
+                "query": _pick_signal_query(
+                    doc_bundle,
+                    ("current_chapter_notes", "current_notes", "story_so_far"),
+                    section_keywords=("locked decisions", "threads carried forward", "continuity closeout"),
+                    field_names=("status",),
+                    keywords=("decision", "thread", "carry", "obligation", "watch"),
+                )
+                or _fallback_query(project, "history"),
+            },
+        ]
+    if task == "scripting":
+        return [
+            {
+                "mode": "planning",
+                "query": _pick_signal_query(
+                    doc_bundle,
+                    ("current_chapter_notes", "current_notes"),
+                    section_keywords=("script layer", "chapter goals", "this chapter must include", "next start point", "pickup instructions"),
+                    field_names=("next_action", "status"),
+                    keywords=("beat", "scene", "sequence", "reveal", "purpose", "next beat", "compile"),
+                )
+                or _fallback_query(project, "planning"),
+            },
+            {
+                "mode": "history",
+                "query": _pick_signal_query(
+                    doc_bundle,
+                    ("current_chapter_notes", "current_notes", "story_so_far"),
+                    section_keywords=("locked decisions", "threads carried forward", "continuity closeout"),
+                    field_names=("status",),
+                    keywords=("decision", "carry", "thread", "guardrail", "continuity"),
+                )
+                or _fallback_query(project, "history"),
+            },
+        ]
+    if task == "staging":
+        return [
+            {
+                "mode": "planning",
+                "query": _pick_signal_query(
+                    doc_bundle,
+                    ("current_chapter_notes", "current_notes"),
+                    section_keywords=(
+                        "staging layer",
+                        "watch out",
+                        "continuity watch",
+                        "active scene",
+                        "threads carried forward",
+                    ),
+                    field_names=("next_action",),
+                    keywords=("atmosphere", "pressure", "sensory", "subtext", "watch", "pov", "obligation"),
+                )
+                or _fallback_query(project, "planning"),
+            },
+            {
+                "mode": "history",
+                "query": _pick_signal_query(
+                    doc_bundle,
+                    ("current_chapter_notes", "current_notes", "story_so_far"),
+                    section_keywords=("threads carried forward", "continuity closeout", "locked decisions"),
+                    field_names=("status",),
+                    keywords=("continuity", "carry", "decision", "thread", "watch"),
+                )
+                or _fallback_query(project, "history"),
+            },
+        ]
+    if task == "planning":
+        precise_task = _resolved_session_packet_task(task, _derive_operative_phase(doc_bundle, _extract_phase(doc_bundle)))
+        if precise_task in {"braindump", "scripting", "staging"}:
+            return _select_session_queries(doc_bundle, project, precise_task)
+        return [
+            {"mode": "planning", "query": _collect_mode_queries(doc_bundle, project, "planning")[0]},
+            {"mode": "history", "query": _collect_mode_queries(doc_bundle, project, "history")[0]},
+        ]
     if task == "prose":
         planning_query = _collect_mode_queries(doc_bundle, project, "planning")[0]
         history_query = _collect_mode_queries(doc_bundle, project, "history")[0]
         return [
             {"mode": "planning", "query": planning_query},
             {"mode": "history", "query": history_query},
+        ]
+    if task == "audit":
+        return [
+            {"mode": "audit", "query": _collect_mode_queries(doc_bundle, project, "audit")[0]},
+            {"mode": "history", "query": _collect_mode_queries(doc_bundle, project, "history")[0]},
         ]
     if task == "debug":
         audit_query = _collect_mode_queries(doc_bundle, project, "audit")[0]
@@ -2969,37 +3459,220 @@ def _extract_recommended_loadout(doc_bundle: dict, derived_phase: str | None) ->
     return []
 
 
-def _derive_target_phase(doc_bundle: dict, phase: str | None) -> str | None:
+def _session_task_for_phase(phase: str | None) -> str:
+    mapping = {
+        "BRAINDUMP": "braindump",
+        "SCRIPTING": "scripting",
+        "STAGING": "staging",
+        "PROSE": "prose",
+        "AUDIT": "audit",
+        "DEBUG": "debug",
+        "COMPLETE": "closeout",
+    }
+    return mapping.get((phase or "").upper(), "planning")
+
+
+def _derive_operative_phase(doc_bundle: dict, phase: str | None) -> str | None:
+    raw_phase = (phase or _extract_phase(doc_bundle) or "").upper() or None
     status_text = _extract_field(doc_bundle, "status") or ""
     next_action = _extract_field(doc_bundle, "next_action") or ""
-    combined = f"{status_text} {next_action}".lower()
-    if any(token in combined for token in ("planning", "plan", "scene design", "sequencing", "structure")):
+    signal_lines = _section_from_docs(
+        doc_bundle,
+        ("current_notes", "current_chapter_notes"),
+        section_keywords=(
+            "what is actually ready",
+            "current priorities",
+            "session handoff",
+            "pickup instructions",
+            "next start point",
+            "phase exit criteria",
+            "current focus",
+            "current phase",
+            "cdlc status",
+        ),
+        max_items=12,
+    )
+    combined = " ".join([raw_phase or "", status_text, next_action, *signal_lines]).lower()
+
+    def has_any(*tokens: str) -> bool:
+        return any(token in combined for token in tokens)
+
+    if raw_phase == "COMPLETE":
+        if has_any("staging", "scene geometry", "internal pressure", "sensory", "subtext", "atmosphere"):
+            return "STAGING"
+        if has_any("braindump", "brainstorm", "ideation"):
+            return "BRAINDUMP"
+        if has_any(
+            "planning",
+            "plan",
+            "scene design",
+            "sequencing",
+            "structure",
+            "scripting",
+            "wireframe",
+            "beat sheet",
+            "beat map",
+            "chapter 2 planning",
+            "reset 05_current_chapter_notes",
+        ):
+            return "SCRIPTING"
+        if has_any("draft", "write", "prose"):
+            return "PROSE"
+        return raw_phase
+
+    if has_any("debug", "repair pass", "repair the", "dominant failure", "revision priority"):
+        return "DEBUG"
+    if has_any("audit", "cold audit", "latest score", "final checklist"):
+        return "AUDIT"
+    if has_any("staging", "scene geometry", "internal pressure", "sensory anchor", "subtext", "atmosphere"):
+        return "STAGING"
+    if has_any("braindump", "brainstorm", "ideation"):
+        return "BRAINDUMP"
+    if has_any("scripting", "scene design", "sequencing", "wireframe", "beat sheet", "beat map", "structure"):
         return "SCRIPTING"
-    if any(token in combined for token in ("draft", "write", "prose")):
+    if has_any("prose", "draft", "write the chapter", "write chapter", "draft the chapter", "drafting"):
         return "PROSE"
-    return phase
+
+    return raw_phase
+
+
+def _task_profile_key(task: str, operative_phase: str | None) -> str:
+    if task == "planning":
+        derived = _session_task_for_phase(operative_phase)
+        return derived if derived in {"braindump", "scripting", "staging"} else "planning"
+    if task == "startup":
+        derived = _session_task_for_phase(operative_phase)
+        return derived if derived in {"braindump", "scripting", "staging", "prose", "audit", "debug"} else "startup"
+    return task
+
+
+def _session_phase_guardrails(task: str, operative_phase: str | None) -> list[str]:
+    profile = _task_profile_key(task, operative_phase)
+    guardrails = {
+        "startup": [
+            "Treat live story-bible docs as canon and sidecar evidence as process memory only.",
+            "Use the packet to orient the session, not to silently rewrite project state.",
+        ],
+        "braindump": [
+            "Stay in ideation and pressure discovery; do not compile scene prose yet.",
+            "Preserve unresolved options instead of pretending structure is already locked.",
+        ],
+        "scripting": [
+            "Lock sequence, reveals, and beat order before prose styling takes over.",
+            "If a major beat is missing, fix the structure here instead of patching it later in prose.",
+        ],
+        "staging": [
+            "Focus on atmosphere, scene geometry, and internal pressure before drafting sentences.",
+            "Do not treat staging as line polish; it exists to stabilize POV, tension, and emotional temperature.",
+        ],
+        "planning": [
+            "Use this as a broad pre-prose compatibility pass when the live docs do not cleanly distinguish braindump, scripting, or staging yet.",
+            "Prefer the more exact phase task once the operative phase is obvious.",
+        ],
+        "prose": [
+            "Draft from live docs first; use sidecar evidence only to preserve continuity and prior decisions.",
+            "Do not turn checkpoint or audit language into diegetic prose.",
+        ],
+        "audit": [
+            "Judge the prose against the audit docs and the locked intent, not against raw brainstorming residue.",
+            "Keep the critique focused on dominant failures and blocking issues first.",
+        ],
+        "debug": [
+            "Repair the dominant failure before broad polish.",
+            "Only log a discarded path when a concrete rejected structure actually exists.",
+        ],
+        "handoff": [
+            "Capture the next session's true starting position, not a vanity summary.",
+            "Preserve open risks and rejected options instead of implying false closure.",
+        ],
+        "closeout": [
+            "Archive the sidecar-safe bundle only; do not mutate canon docs through the sidecar.",
+            "Make sure the next session can restart without reopening the entire work history.",
+        ],
+    }
+    return guardrails.get(profile, guardrails["startup"])
+
+
+def _session_done_criteria(task: str, operative_phase: str | None) -> list[str]:
+    profile = _task_profile_key(task, operative_phase)
+    criteria = {
+        "startup": [
+            "The next real session task is explicit.",
+            "The exact files to open and the key carry-forward pressures are visible.",
+        ],
+        "braindump": [
+            "The chapter purpose and central pressure are explicit.",
+            "The unresolved options are named without pretending the structure is locked.",
+        ],
+        "scripting": [
+            "The beat order and scene purpose are explicit enough to compile into staging.",
+            "The reveal sequence and pressure logic no longer rely on vague intuition.",
+        ],
+        "staging": [
+            "Atmosphere, subtext, and internal pressure are stable enough to draft from.",
+            "The POV emotional temperature and scene geometry are clear.",
+        ],
+        "planning": [
+            "The next pre-prose step is explicit even if the docs still use broad planning language.",
+            "A more exact phase task can be named without guessing.",
+        ],
+        "prose": [
+            "The draft can start from a stable loadout and continuity watch.",
+            "The next move after drafting is explicit.",
+        ],
+        "audit": [
+            "The dominant failure and exact audit inputs are explicit.",
+            "The next debug move is concrete rather than generic.",
+        ],
+        "debug": [
+            "The repair pass is scoped to the dominant failure.",
+            "Any rejected structure worth preserving is logged or explicitly skipped.",
+        ],
+        "handoff": [
+            "The next session can restart from the saved packet without re-deriving project state.",
+            "Carry-forward risks and decisions are preserved in sidecar-safe form.",
+        ],
+        "closeout": [
+            "Checkpoint, audit, and handoff artifacts are archived or previewed clearly.",
+            "The next session can restart from startup instead of reconstructing closeout state manually.",
+        ],
+    }
+    return criteria.get(profile, criteria["startup"])
+
+
+def _derive_target_phase(doc_bundle: dict, phase: str | None) -> str | None:
+    return _derive_operative_phase(doc_bundle, phase)
 
 
 def _derive_suggested_loadout(doc_bundle: dict, phase: str | None) -> list[str]:
-    target_phase = _derive_target_phase(doc_bundle, phase)
+    target_phase = _derive_operative_phase(doc_bundle, phase)
     explicit = _extract_recommended_loadout(doc_bundle, target_phase)
     if explicit:
         return explicit
     return PHASE_LOADOUT.get(target_phase or "", PHASE_LOADOUT.get(phase or "", []))
 
 
-def _derive_session_loadout(doc_bundle: dict, phase: str | None, task: str) -> list[str]:
+def _derive_session_loadout(
+    doc_bundle: dict,
+    phase: str | None,
+    task: str,
+    operative_phase: str | None = None,
+) -> list[str]:
+    operative_phase = operative_phase or _derive_operative_phase(doc_bundle, phase)
     if task == "startup":
-        return _derive_suggested_loadout(doc_bundle, phase)
+        return _derive_suggested_loadout(doc_bundle, operative_phase)
 
     target_phase = {
-        "planning": "SCRIPTING",
+        "braindump": "BRAINDUMP",
+        "scripting": "SCRIPTING",
+        "staging": "STAGING",
+        "planning": operative_phase or "SCRIPTING",
         "prose": "PROSE",
         "audit": "AUDIT",
         "debug": "DEBUG",
-        "handoff": _derive_target_phase(doc_bundle, phase) or phase,
+        "handoff": operative_phase or phase,
         "closeout": "COMPLETE",
-    }.get(task, phase)
+    }.get(task, operative_phase or phase)
     explicit = _extract_recommended_loadout(doc_bundle, target_phase)
     if explicit:
         return explicit
@@ -3007,18 +3680,8 @@ def _derive_session_loadout(doc_bundle: dict, phase: str | None, task: str) -> l
 
 
 def _infer_followup_session_task(doc_bundle: dict, phase: str | None) -> str:
-    target_phase = _derive_target_phase(doc_bundle, phase)
-    if target_phase in {"BRAINDUMP", "SCRIPTING", "STAGING"}:
-        return "planning"
-    if target_phase == "PROSE":
-        return "prose"
-    if target_phase == "AUDIT":
-        return "audit"
-    if target_phase == "DEBUG":
-        return "debug"
-    if phase == "COMPLETE":
-        return "closeout"
-    return "planning"
+    target_phase = _derive_operative_phase(doc_bundle, phase)
+    return _session_task_for_phase(target_phase)
 
 
 def _collect_recent_artifacts(output_root: Path, limit: int = 5) -> list[dict]:
@@ -4190,6 +4853,9 @@ def doctor_writing_sidecar(
 
     version = get_installed_mempalace_version()
     checks = []
+    project_root = Path(context["project_root"])
+    workflow_checks = _collect_workflow_checks(project_root)
+    assistant_ready = _assistant_ready(workflow_checks)
 
     if version is None:
         checks.append(
@@ -4263,7 +4929,7 @@ def doctor_writing_sidecar(
 
     report = {
         "project": project,
-        "project_root": str(context["project_root"]),
+        "project_root": str(project_root),
         "vault_root": str(context["vault_root"]),
         "output_root": str(context["output_root"]),
         "palace_path": str(context["palace_path"]),
@@ -4273,7 +4939,9 @@ def doctor_writing_sidecar(
         "mempalace_version": version,
         "supported_spec": SUPPORTED_MEMPALACE_SPEC,
         "checks": checks,
-        "ok": not any(item["status"] == "fail" for item in checks),
+        "workflow_checks": workflow_checks,
+        "assistant_ready": assistant_ready,
+        "ok": not any(item["status"] == "fail" for item in checks + workflow_checks),
     }
     return report
 
@@ -4304,6 +4972,20 @@ def print_doctor_report(report: dict):
         else:
             print(f"    {status:5} {label:20} {detail}")
 
+    print("\n  Workflow checks:")
+    for item in report.get("workflow_checks", []):
+        status = item["status"].upper()
+        label = item["name"]
+        detail = item.get("detail", "")
+        path = item.get("path")
+        if path:
+            print(f"    {status:5} {label:20} {path}")
+            if detail:
+                print(f"          {detail}")
+        else:
+            print(f"    {status:5} {label:20} {detail}")
+
+    print(f"\n  Assistant ready: {'YES' if report.get('assistant_ready') else 'NO'}")
     print(f"\n  Result: {'PASS' if report['ok'] else 'FAIL'}")
     print(f"\n{'=' * 55}\n")
 

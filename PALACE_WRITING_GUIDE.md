@@ -40,7 +40,8 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 ## Practical AI behavior
 
 - start with `writing-sidecar session --task startup` when entering a sidecar-enabled project
-- once real work begins, prefer `writing-sidecar session --task planning|prose|audit|debug|handoff|closeout --write`
+- once real work begins, prefer `writing-sidecar session --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`
+- keep `planning` only as a compatibility umbrella when you want a broad pre-prose packet
 - use `writing-sidecar status` when you only need raw health / staleness
 - if stale and the task needs process memory, run `writing-sidecar sync`
 - use `writing-sidecar search --mode planning` only when `session` or `context` did not give enough planning signal
@@ -58,7 +59,7 @@ Recommended order:
 
 1. `writing-sidecar doctor <vault-or-project> --project <name>`
 2. `writing-sidecar session <vault-or-project> --project <name> --task startup`
-3. `writing-sidecar session <vault-or-project> --project <name> --task planning|prose|audit|debug|handoff|closeout --write`
+3. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`
 4. `writing-sidecar search ...` only if you need narrower follow-up evidence
 5. `writing-sidecar recap ...` only when you are recovering from a break, doing a handoff, or checking continuity risk
 
@@ -73,3 +74,9 @@ If another tool or assistant layer needs machine-readable output, use `--format 
 - `projects`
 - `doctor`
 - `maintain`
+
+Visible helper output is available on:
+
+- `session --out <path>`
+- `context --out <path>`
+- `recap --out <path>`

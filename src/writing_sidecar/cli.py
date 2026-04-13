@@ -33,7 +33,9 @@ from .workflow import (
     print_writing_search_results,
     print_writing_session,
     print_writing_status,
+    render_writing_context,
     render_writing_recap,
+    render_writing_session,
     scaffold_writing_sidecar,
     search_writing_sidecar,
 )
@@ -333,7 +335,7 @@ def cmd_context(args):
     context_data = build_writing_context(
         vault_dir=args.dir,
         project=args.project,
-        out_dir=args.out,
+        out_dir=args.sidecar_out,
         codex_home=args.codex_home,
         config_path=args.config,
         brainstorm_paths=args.brainstorms,
@@ -347,11 +349,15 @@ def cmd_context(args):
         n_results=args.results,
     )
     if args.format == "json":
-        _emit_json(context_data)
-        return
-    if context_data.get("synced") and context_data.get("sync_summary"):
-        print_export_summary(context_data["sync_summary"], dry_run=False)
-    print_writing_context(context_data)
+        rendered = json.dumps(context_data, indent=2)
+        print(rendered)
+    else:
+        rendered = render_writing_context(context_data)
+        if context_data.get("synced") and context_data.get("sync_summary"):
+            print_export_summary(context_data["sync_summary"], dry_run=False)
+        print(rendered)
+    if args.out:
+        _write_rendered_output(args.out, rendered)
 
 
 def cmd_recap(args):
@@ -422,7 +428,7 @@ def cmd_session(args):
     report = build_writing_session(
         vault_dir=args.dir,
         project=args.project,
-        out_dir=args.out,
+        out_dir=args.sidecar_out,
         codex_home=args.codex_home,
         config_path=args.config,
         brainstorm_paths=args.brainstorms,
@@ -438,11 +444,15 @@ def cmd_session(args):
         n_results=args.results,
     )
     if args.format == "json":
-        _emit_json(report)
-        return
-    if report.get("sync_performed") and report.get("sync_summary"):
-        print_export_summary(report["sync_summary"], dry_run=False)
-    print_writing_session(report)
+        rendered = json.dumps(report, indent=2)
+        print(rendered)
+    else:
+        rendered = render_writing_session(report)
+        if report.get("sync_performed") and report.get("sync_summary"):
+            print_export_summary(report["sync_summary"], dry_run=False)
+        print(rendered)
+    if args.out:
+        _write_rendered_output(args.out, rendered)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -516,7 +526,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_format_arg(p_doctor)
 
     p_context = sub.add_parser("context", help="Build a compact startup/context packet for assistants")
-    _shared_project_args(p_context)
+    _shared_project_args(p_context, include_sidecar_out=False)
+    p_context.add_argument(
+        "--sidecar-out",
+        default=None,
+        help="Optional sidecar output directory override (default: <vault>/.sidecars/<project>)",
+    )
     p_context.add_argument(
         "--mode",
         choices=CONTEXT_MODES,
@@ -531,6 +546,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_context.add_argument("--refresh-palace", action="store_true", help="Rebuild the target palace before mining")
     p_context.add_argument("--results", type=int, default=3, help="Number of hits per context query")
+    p_context.add_argument("--out", default=None, help="Optional output path for the rendered context packet")
     _add_format_arg(p_context)
 
     p_recap = sub.add_parser("recap", help="Generate a deterministic restart or handoff recap")
@@ -596,7 +612,12 @@ def build_parser() -> argparse.ArgumentParser:
     _add_format_arg(p_maintain)
 
     p_session = sub.add_parser("session", help="Run a phase-aware assistant sidecar workflow")
-    _shared_project_args(p_session)
+    _shared_project_args(p_session, include_sidecar_out=False)
+    p_session.add_argument(
+        "--sidecar-out",
+        default=None,
+        help="Optional sidecar output directory override (default: <vault>/.sidecars/<project>)",
+    )
     p_session.add_argument(
         "--task",
         choices=SESSION_TASKS,
@@ -618,6 +639,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Additional assistant/human note to merge into sidecar-safe writes; repeat as needed",
     )
     p_session.add_argument("--results", type=int, default=3, help="Number of hits per session query")
+    p_session.add_argument("--out", default=None, help="Optional output path for the rendered session packet")
     _add_format_arg(p_session)
 
     return parser

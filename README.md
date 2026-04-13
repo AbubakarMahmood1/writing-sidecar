@@ -130,13 +130,14 @@ writing-sidecar projects C:/vault --format json
 Recommended Codex operating loop:
 
 1. `writing-sidecar session <vault-or-project> --project <name> --task startup`
-2. `writing-sidecar session <vault-or-project> --project <name> --task planning|prose|audit|debug|handoff|closeout --write`
-3. use `search`, `context`, `recap`, or `maintain` only when you need narrower control
-4. keep live story-bible docs as canon and treat sidecar output as process memory only
+2. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`
+3. treat `planning` as a compatibility umbrella, not the preferred long-term phase task
+4. use `search`, `context`, `recap`, or `maintain` only when you need narrower control
+5. keep live story-bible docs as canon and treat sidecar output as process memory only
 
 ## JSON contract
 
-When you use `--format json`, v4 keeps these top-level keys stable where they apply:
+When you use `--format json`, v5 keeps these top-level keys stable where they apply:
 
 - `project`
 - `project_root`
@@ -149,12 +150,18 @@ When you use `--format json`, v4 keeps these top-level keys stable where they ap
 Command-specific payload keys remain stable too:
 
 - `status`: `room_counts`, `config_path`, `manifest_path`, `palace_path`, `runtime_root`
-- `session`: `task`, `suggested_loadout`, `recommended_actions`, `write_performed`, `sync_performed`, `queries_run`, `results`, `recap_sections`, `warnings`
+- `session`: `task`, `operative_phase`, `suggested_loadout`, `doc_loadout`, `file_targets`, `continuity_watch`, `phase_guardrails`, `done_criteria`, `recommended_actions`, `recommended_commands`, `artifact_targets`, `write_performed`, `sync_performed`, `queries_run`, `results`, `recap_sections`, `warnings`
 - `context`: `mode`, `queries_run`, `results`, `warnings`, `suggested_loadout`, `recent_artifacts`
 - `recap`: `mode`, `sections`, `queries_run`, `results`, `warnings`
-- `projects`: `count`, `projects`
-- `doctor`: `checks`, `ok`, `supported_spec`, `mempalace_version`
+- `projects`: `count`, `projects`, including per-project `operative_phase`, `next_action`, `assistant_ready`, `last_checkpoint_at`
+- `doctor`: `checks`, `workflow_checks`, `assistant_ready`, `ok`, `supported_spec`, `mempalace_version`
 - `maintain`: `kind`, `mode`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `source_inputs`, `generated_sections`
+
+Visible helper output is also supported on:
+
+- `session --out <path>`
+- `context --out <path>`
+- `recap --out <path>`
 
 ## Maintenance Rule
 

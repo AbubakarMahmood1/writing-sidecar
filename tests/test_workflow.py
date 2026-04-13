@@ -841,6 +841,11 @@ def test_doctor_reports_supported_version_and_writable_paths(monkeypatch, capsys
     try:
         vault_root = tmp_path / "vault"
         project_root = vault_root / "Witcher-DC"
+        _ensure_dir(project_root)
+        scaffold_writing_sidecar(str(vault_root), "Witcher-DC")
+        write_file(project_root / "AGENTS.md", "gateway")
+        write_file(project_root / "_story_bible" / "05_Current_Notes.md", "**Status:** READY FOR SCRIPTING\n")
+        write_file(project_root / "_story_bible" / "05_Current_Chapter_Notes.md", "**Phase:** SCRIPTING\n")
         write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
 
         report = doctor_writing_sidecar(
@@ -855,6 +860,8 @@ def test_doctor_reports_supported_version_and_writable_paths(monkeypatch, capsys
         assert report["supported_spec"] == SUPPORTED_MEMPALACE_SPEC
         assert any(item["name"] == "mempalace_version" and item["status"] == "ok" for item in report["checks"])
         assert any(item["name"] == "codex_home" and item["status"] == "warn" for item in report["checks"])
+        assert report["assistant_ready"] is True
+        assert all(item["status"] == "ok" for item in report["workflow_checks"])
         assert "Writing Sidecar Doctor" in output
     finally:
         cleanup_temp_dir(tmp_path)
@@ -865,6 +872,11 @@ def test_doctor_marks_unsupported_version(monkeypatch):
     try:
         vault_root = tmp_path / "vault"
         project_root = vault_root / "Witcher-DC"
+        _ensure_dir(project_root)
+        scaffold_writing_sidecar(str(vault_root), "Witcher-DC")
+        write_file(project_root / "AGENTS.md", "gateway")
+        write_file(project_root / "_story_bible" / "05_Current_Notes.md", "**Status:** READY FOR SCRIPTING\n")
+        write_file(project_root / "_story_bible" / "05_Current_Chapter_Notes.md", "**Phase:** SCRIPTING\n")
         write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
 
         monkeypatch.setattr("writing_sidecar.workflow.get_installed_mempalace_version", lambda: "3.2.0")
@@ -888,6 +900,11 @@ def test_doctor_marks_unwritable_paths(monkeypatch):
     try:
         vault_root = tmp_path / "vault"
         project_root = vault_root / "Witcher-DC"
+        _ensure_dir(project_root)
+        scaffold_writing_sidecar(str(vault_root), "Witcher-DC")
+        write_file(project_root / "AGENTS.md", "gateway")
+        write_file(project_root / "_story_bible" / "05_Current_Notes.md", "**Status:** READY FOR SCRIPTING\n")
+        write_file(project_root / "_story_bible" / "05_Current_Chapter_Notes.md", "**Phase:** SCRIPTING\n")
         write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
 
         monkeypatch.setattr("writing_sidecar.workflow._check_writable_path", lambda path: (False, "Not writable: denied"))
@@ -936,7 +953,11 @@ def test_list_writing_projects_reports_states():
         fresh_root = vault_root / "Second-Project"
         clean_palace = default_palace_dir(vault_root.resolve(), "Witcher-DC")
 
-        write_file(clean_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        _ensure_dir(clean_root)
+        scaffold_writing_sidecar(str(vault_root), "Witcher-DC")
+        write_file(clean_root / "AGENTS.md", "gateway")
+        write_file(clean_root / "_story_bible" / "05_Current_Notes.md", "**Status:** READY FOR SCRIPTING\n**Next Action:** Build the next scene wireframe.\n")
+        write_file(clean_root / "_story_bible" / "05_Current_Chapter_Notes.md", "**Phase:** COMPLETE\n")
         write_file(clean_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
         export_writing_corpus(
             vault_dir=str(vault_root),
@@ -945,7 +966,8 @@ def test_list_writing_projects_reports_states():
         )
         _ensure_dir(clean_palace)
 
-        write_file(fresh_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        _ensure_dir(fresh_root)
+        scaffold_writing_sidecar(str(vault_root), "Second-Project")
         write_file(fresh_root / "_story_bible" / "research" / "notes.md", "Reference")
 
         report = list_writing_projects(str(vault_root))
@@ -953,7 +975,10 @@ def test_list_writing_projects_reports_states():
 
         assert report["count"] == 2
         assert projects["Second-Project"]["state"] == "not_built"
+        assert projects["Second-Project"]["assistant_ready"] is False
         assert projects["Witcher-DC"]["state"] == "clean"
+        assert projects["Witcher-DC"]["assistant_ready"] is True
+        assert projects["Witcher-DC"]["operative_phase"] == "SCRIPTING"
     finally:
         cleanup_temp_dir(tmp_path)
 
@@ -1412,12 +1437,14 @@ def test_build_writing_session_startup_recommends_followup_and_can_write(monkeyp
 
         assert preview["task"] == "startup"
         assert preview["write_performed"] is False
+        assert preview["operative_phase"] == "SCRIPTING"
         assert preview["suggested_loadout"] == [
             "02B_Character_Quick_Reference.md",
             "05_Current_Chapter_Notes.md",
         ]
         assert any("--task startup --write" in item for item in preview["recommended_actions"])
-        assert any("--task planning --write" in item for item in preview["recommended_actions"])
+        assert any("--task scripting --write" in item for item in preview["recommended_actions"])
+        assert any("--task scripting --write" in item for item in preview["recommended_commands"])
 
         written = build_writing_session(
             vault_dir=str(project_root),
@@ -1524,6 +1551,9 @@ def test_build_writing_session_prose_uses_planning_history_and_continuity_watch(
 @pytest.mark.parametrize(
     ("task", "expected_kinds"),
     [
+        ("braindump", ["checkpoint"]),
+        ("scripting", ["checkpoint"]),
+        ("staging", ["checkpoint"]),
         ("planning", ["checkpoint"]),
         ("prose", ["checkpoint"]),
         ("audit", ["audit"]),
@@ -1774,6 +1804,7 @@ def test_cli_json_output_for_status_context_projects_doctor_and_session(monkeypa
             "reasons": [],
             "last_synced_at": "2026-04-10T00:00:00+00:00",
             "phase": "STAGING",
+            "operative_phase": "STAGING",
             "current_chapter": "Under Protection",
             "current_arc": None,
             "suggested_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
@@ -1796,6 +1827,8 @@ def test_cli_json_output_for_status_context_projects_doctor_and_session(monkeypa
             "mempalace_version": "3.1.0",
             "supported_spec": SUPPORTED_MEMPALACE_SPEC,
             "checks": [],
+            "workflow_checks": [],
+            "assistant_ready": True,
             "ok": True,
         }
         projects_payload = {
@@ -1809,6 +1842,10 @@ def test_cli_json_output_for_status_context_projects_doctor_and_session(monkeypa
                     "state": "clean",
                     "stale": False,
                     "last_synced_at": "2026-04-10T00:00:00+00:00",
+                    "last_checkpoint_at": "2026-04-10T00:00:00+00:00",
+                    "operative_phase": "SCRIPTING",
+                    "next_action": "Open Chapter 2 from Atlantis.",
+                    "assistant_ready": True,
                     "room_counts": {"brainstorms": 1},
                     "reasons": [],
                 }
@@ -1820,11 +1857,19 @@ def test_cli_json_output_for_status_context_projects_doctor_and_session(monkeypa
             "vault_root": "C:/vault",
             "task": "startup",
             "phase": "COMPLETE",
+            "operative_phase": "SCRIPTING",
             "state": "clean",
             "stale": False,
             "reasons": [],
             "last_synced_at": "2026-04-10T00:00:00+00:00",
             "suggested_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "doc_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "file_targets": ["C:/vault/Witcher-DC/_story_bible/05_Current_Chapter_Notes.md"],
+            "continuity_watch": ["Arthur sponsorship stays active."],
+            "phase_guardrails": ["Keep live docs canonical."],
+            "done_criteria": ["The next real task is explicit."],
+            "recommended_commands": ["writing-sidecar session \"C:/vault/Witcher-DC\" --task scripting --write"],
+            "artifact_targets": ["C:/vault/Witcher-DC/logs/checkpoints/2026-04-10_chapter-1_session_checkpoint.md"],
             "recommended_actions": ["next"],
             "write_performed": False,
             "sync_performed": False,
@@ -1851,6 +1896,104 @@ def test_cli_json_output_for_status_context_projects_doctor_and_session(monkeypa
             cli.main(sys.argv[1:])
             parsed = json.loads(capsys.readouterr().out)
             assert key in parsed
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_cli_context_recap_and_session_support_out_files(monkeypatch):
+    import writing_sidecar.cli as cli
+
+    tmp_path = make_temp_dir()
+    try:
+        context_out = tmp_path / "context.txt"
+        recap_out = tmp_path / "recap.txt"
+        session_out = tmp_path / "session.txt"
+
+        context_payload = {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "mode": "startup",
+            "synced": False,
+            "sync_summary": None,
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "phase": "COMPLETE",
+            "operative_phase": "SCRIPTING",
+            "current_chapter": "2",
+            "current_arc": None,
+            "suggested_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "queries_run": [],
+            "results": [],
+            "warnings": [],
+            "recent_artifacts": [],
+            "doc_highlights": {},
+            "source_priority": ["live_docs", "sidecar"],
+        }
+        recap_payload = {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "mode": "restart",
+            "synced": False,
+            "sync_summary": None,
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "phase": "COMPLETE",
+            "current_chapter": "2",
+            "current_arc": None,
+            "sections": {"Where We Are": ["ready"]},
+            "queries_run": [],
+            "results": [],
+            "warnings": [],
+            "source_priority": ["live_docs", "sidecar"],
+        }
+        session_payload = {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "task": "startup",
+            "phase": "COMPLETE",
+            "operative_phase": "SCRIPTING",
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "suggested_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "doc_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "file_targets": ["C:/vault/Witcher-DC/_story_bible/05_Current_Chapter_Notes.md"],
+            "continuity_watch": ["watch"],
+            "phase_guardrails": ["guardrail"],
+            "done_criteria": ["done"],
+            "recommended_commands": ["command"],
+            "artifact_targets": ["target"],
+            "recommended_actions": ["action"],
+            "write_performed": False,
+            "sync_performed": False,
+            "queries_run": [],
+            "results": [],
+            "recap_sections": {},
+            "warnings": [],
+        }
+
+        monkeypatch.setattr(cli, "build_writing_context", lambda **kwargs: context_payload)
+        monkeypatch.setattr(cli, "build_writing_recap", lambda **kwargs: recap_payload)
+        monkeypatch.setattr(cli, "build_writing_session", lambda **kwargs: session_payload)
+        monkeypatch.setattr(cli, "render_writing_context", lambda payload: "context-rendered")
+        monkeypatch.setattr(cli, "render_writing_recap", lambda payload: "recap-rendered")
+        monkeypatch.setattr(cli, "render_writing_session", lambda payload: "session-rendered")
+
+        cli.main(["context", str(tmp_path), "--project", "Witcher-DC", "--out", str(context_out)])
+        cli.main(["recap", str(tmp_path), "--project", "Witcher-DC", "--out", str(recap_out)])
+        cli.main(["session", str(tmp_path), "--project", "Witcher-DC", "--out", str(session_out)])
+
+        assert context_out.read_text(encoding="utf-8") == "context-rendered"
+        assert recap_out.read_text(encoding="utf-8") == "recap-rendered"
+        assert session_out.read_text(encoding="utf-8") == "session-rendered"
     finally:
         cleanup_temp_dir(tmp_path)
 
@@ -2063,5 +2206,97 @@ def test_maintain_closeout_writes_multiple_artifacts_and_syncs(monkeypatch):
         )
         assert status["stale"] is False
         assert status["room_counts"]["checkpoints"] >= 1
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_doctor_marks_missing_agents_as_warn_but_keeps_assistant_ready_true():
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        _ensure_dir(project_root)
+        scaffold_writing_sidecar(str(vault_root), "Witcher-DC")
+        write_file(project_root / "_story_bible" / "05_Current_Notes.md", "**Status:** READY FOR SCRIPTING\n")
+        write_file(project_root / "_story_bible" / "05_Current_Chapter_Notes.md", "**Phase:** SCRIPTING\n")
+
+        report = doctor_writing_sidecar(vault_dir=str(vault_root), project="Witcher-DC")
+
+        agents_check = next(item for item in report["workflow_checks"] if item["name"] == "agents_gateway")
+        assert agents_check["status"] == "warn"
+        assert report["assistant_ready"] is True
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_build_writing_session_scripting_and_staging_produce_distinct_packets(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** READY FOR CHAPTER 2 PLANNING\n**Next Action:** Lock the scene wireframe before prose.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                **Phase:** SCRIPTING
+                **Chapter:** 2
+
+                ## Script Layer
+
+                - Arthur and Mera define the first political terms.
+
+                ## Staging Layer
+
+                - Atmosphere: sterile Atlantis pressure.
+                - Internal Pressure: Arthur is carrying sponsorship burden.
+                """
+            ).strip(),
+        )
+        write_file(project_root / "logs" / "brainstorms" / "handoff.md", "Arthur and Mera define protection terms.")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {"query": kwargs["query"], "filters": {}, "results": []},
+        )
+
+        scripting = build_writing_session(
+            vault_dir=str(project_root),
+            task="scripting",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            sync="never",
+            n_results=2,
+        )
+        staging = build_writing_session(
+            vault_dir=str(project_root),
+            task="staging",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            sync="never",
+            n_results=2,
+        )
+
+        assert scripting["suggested_loadout"] != staging["suggested_loadout"]
+        assert scripting["phase_guardrails"] != staging["phase_guardrails"]
+        assert scripting["queries_run"][0]["query"] != staging["queries_run"][0]["query"]
+        assert staging["queries_run"][0]["query"] != "COMPLETE"
+        assert any("wireframe" in item.lower() or "sequence" in item.lower() for item in scripting["phase_guardrails"])
+        assert any("atmosphere" in item.lower() or "internal pressure" in item.lower() for item in staging["phase_guardrails"])
     finally:
         cleanup_temp_dir(tmp_path)
