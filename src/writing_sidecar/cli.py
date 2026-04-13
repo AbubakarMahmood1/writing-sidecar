@@ -12,6 +12,7 @@ from .workflow import (
     RECAP_MODES,
     SEARCH_MODE_ROOMS,
     SESSION_TASKS,
+    VERIFY_SCOPES,
     _ensure_dir,
     _project_wing,
     _sidecar_runtime_environment,
@@ -33,11 +34,14 @@ from .workflow import (
     print_writing_search_results,
     print_writing_session,
     print_writing_status,
+    print_writing_verify,
     render_writing_context,
     render_writing_recap,
     render_writing_session,
+    render_writing_verify,
     scaffold_writing_sidecar,
     search_writing_sidecar,
+    verify_writing_sidecar,
 )
 
 
@@ -397,6 +401,37 @@ def cmd_projects(args):
     print_writing_projects(report)
 
 
+def cmd_verify(args):
+    report = verify_writing_sidecar(
+        vault_dir=args.dir,
+        project=args.project,
+        out_dir=args.sidecar_out,
+        codex_home=args.codex_home,
+        config_path=args.config,
+        brainstorm_paths=args.brainstorms,
+        audit_paths=args.audits,
+        discarded_paths=args.discarded_paths,
+        palace_path=args.sidecar_palace,
+        runtime_root=args.runtime_root,
+        sync=args.sync,
+        refresh_palace=args.refresh_palace,
+        scope=args.scope,
+        n_results=args.results,
+    )
+    if args.format == "json":
+        rendered = json.dumps(report, indent=2)
+        print(rendered)
+    else:
+        rendered = render_writing_verify(report)
+        if report.get("synced") and report.get("sync_summary"):
+            print_export_summary(report["sync_summary"], dry_run=False)
+        print(rendered)
+    if args.out:
+        _write_rendered_output(args.out, rendered)
+    if args.strict and report.get("state") == "error":
+        raise SystemExit(1)
+
+
 def cmd_maintain(args):
     report = maintain_writing_sidecar(
         vault_dir=args.dir,
@@ -577,6 +612,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_projects.add_argument("dir", help="Vault root or a path inside one project")
     _add_format_arg(p_projects)
 
+    p_verify = sub.add_parser("verify", help="Run deterministic continuity verification for a writing project")
+    _shared_project_args(p_verify, include_sidecar_out=False)
+    p_verify.add_argument(
+        "--sidecar-out",
+        default=None,
+        help="Optional sidecar output directory override (default: <vault>/.sidecars/<project>)",
+    )
+    p_verify.add_argument(
+        "--scope",
+        choices=VERIFY_SCOPES,
+        default="chapter",
+        help="Verification scope (default: chapter)",
+    )
+    p_verify.add_argument(
+        "--sync",
+        choices=["always", "if-needed", "never"],
+        default="if-needed",
+        help="When to rebuild the sidecar before verification (default: if-needed)",
+    )
+    p_verify.add_argument("--refresh-palace", action="store_true", help="Rebuild the target palace before mining")
+    p_verify.add_argument("--results", type=int, default=3, help="Number of hits per verification query")
+    p_verify.add_argument("--strict", action="store_true", help="Exit non-zero when verification finds at least one error")
+    p_verify.add_argument("--out", default=None, help="Optional output path for the rendered verification report")
+    _add_format_arg(p_verify)
+
     p_maintain = sub.add_parser("maintain", help="Preview or write deterministic sidecar artifacts")
     _shared_project_args(p_maintain)
     p_maintain.add_argument(
@@ -662,6 +722,7 @@ def main(argv=None):
         "context": cmd_context,
         "recap": cmd_recap,
         "projects": cmd_projects,
+        "verify": cmd_verify,
         "maintain": cmd_maintain,
         "session": cmd_session,
     }

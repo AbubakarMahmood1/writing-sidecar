@@ -4,7 +4,7 @@
 
 It keeps process memory separate from canon:
 
-- `writing-sidecar` handles project-aware export, staleness checks, intent-aware search, startup context, recap generation, scaffolding, and runtime isolation.
+- `writing-sidecar` handles project-aware export, staleness checks, intent-aware search, startup context, recap generation, deterministic continuity verification, scaffolding, and runtime isolation.
 - MemPalace handles transcript normalization, mining, and semantic search.
 - Your story bible stays the source of truth.
 
@@ -45,6 +45,7 @@ writing-sidecar session <vault-or-project> --project Witcher-DC --task startup
 writing-sidecar context <vault-or-project> --project Witcher-DC
 writing-sidecar search <vault-or-project> --project Witcher-DC --query "Arthur sponsorship"
 writing-sidecar recap <vault-or-project> --project Witcher-DC --mode restart
+writing-sidecar verify <vault-or-project> --project Witcher-DC --scope chapter
 writing-sidecar maintain <vault-or-project> --project Witcher-DC --kind checkpoint --write
 writing-sidecar sync <vault-or-project> --project Witcher-DC --query "Arthur sponsorship"
 writing-sidecar doctor <vault-or-project> --project Witcher-DC
@@ -59,6 +60,7 @@ Structured output is available on:
 - `recap --format json`
 - `projects --format json`
 - `doctor --format json`
+- `verify --format json`
 
 ## What It Does
 
@@ -69,6 +71,7 @@ Structured output is available on:
 - runs a phase-aware assistant workflow with `session`
 - builds a compact startup packet for assistants with `context`
 - generates deterministic restart / handoff / continuity recaps with `recap`
+- verifies continuity drift against live docs, trackers, timeline files, and sidecar carry-forward memory with `verify`
 - auto-resolves the project when the input path is already inside one sidecar-enabled project
 - isolates Chroma/ONNX caches under a vault-local runtime directory
 
@@ -87,6 +90,10 @@ Fixed rooms:
 - `discarded_paths`
 - `research`
 - `archived_notes`
+
+Tool-owned continuity cache:
+
+- `.sidecars/<project>/.writing-sidecar-verify.json`
 
 ## Scope
 
@@ -113,14 +120,16 @@ For normal project startup:
 
 1. `writing-sidecar doctor <vault-or-project> --project <name>`
 2. `writing-sidecar session <vault-or-project> --project <name> --task startup`
-3. `writing-sidecar search ...` only when you need a tighter follow-up query
-4. do the normal writing task
+3. `writing-sidecar verify <vault-or-project> --project <name> --scope chapter|handoff|timeline` before continuity-sensitive transitions
+4. `writing-sidecar search ...` only when you need a tighter follow-up query
+5. do the normal writing task
 
 Examples:
 
 ```bash
 writing-sidecar session C:/vault --project Witcher-DC --task startup
 writing-sidecar session C:/vault --project Witcher-DC --task planning --write
+writing-sidecar verify C:/vault --project Witcher-DC --scope chapter
 writing-sidecar context C:/vault --project Witcher-DC --mode startup
 writing-sidecar recap C:/vault --project Witcher-DC --mode restart
 writing-sidecar maintain C:/vault --project Witcher-DC --kind checkpoint --write
@@ -130,14 +139,15 @@ writing-sidecar projects C:/vault --format json
 Recommended Codex operating loop:
 
 1. `writing-sidecar session <vault-or-project> --project <name> --task startup`
-2. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`
-3. treat `planning` as a compatibility umbrella, not the preferred long-term phase task
-4. use `search`, `context`, `recap`, or `maintain` only when you need narrower control
-5. keep live story-bible docs as canon and treat sidecar output as process memory only
+2. `writing-sidecar verify <vault-or-project> --project <name> --scope chapter|handoff|timeline` before risky continuity-sensitive transitions
+3. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`
+4. treat `planning` as a compatibility umbrella, not the preferred long-term phase task
+5. use `search`, `context`, `recap`, or `maintain` only when you need narrower control
+6. keep live story-bible docs as canon and treat sidecar output as process memory only
 
 ## JSON contract
 
-When you use `--format json`, v5 keeps these top-level keys stable where they apply:
+When you use `--format json`, v6 keeps these top-level keys stable where they apply:
 
 - `project`
 - `project_root`
@@ -150,11 +160,12 @@ When you use `--format json`, v5 keeps these top-level keys stable where they ap
 Command-specific payload keys remain stable too:
 
 - `status`: `room_counts`, `config_path`, `manifest_path`, `palace_path`, `runtime_root`
-- `session`: `task`, `operative_phase`, `suggested_loadout`, `doc_loadout`, `file_targets`, `continuity_watch`, `phase_guardrails`, `done_criteria`, `recommended_actions`, `recommended_commands`, `artifact_targets`, `write_performed`, `sync_performed`, `queries_run`, `results`, `recap_sections`, `warnings`
+- `session`: `task`, `operative_phase`, `suggested_loadout`, `doc_loadout`, `file_targets`, `continuity_watch`, `phase_guardrails`, `done_criteria`, `recommended_actions`, `recommended_commands`, `artifact_targets`, `write_performed`, `sync_performed`, `queries_run`, `results`, `recap_sections`, `warnings`, `verification_scope`, `continuity_state`, `finding_counts`, `top_findings`, `recommended_repairs`
 - `context`: `mode`, `queries_run`, `results`, `warnings`, `suggested_loadout`, `recent_artifacts`
 - `recap`: `mode`, `sections`, `queries_run`, `results`, `warnings`
-- `projects`: `count`, `projects`, including per-project `operative_phase`, `next_action`, `assistant_ready`, `last_checkpoint_at`
-- `doctor`: `checks`, `workflow_checks`, `assistant_ready`, `ok`, `supported_spec`, `mempalace_version`
+- `projects`: `count`, `projects`, including per-project `operative_phase`, `next_action`, `assistant_ready`, `last_checkpoint_at`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`
+- `doctor`: `checks`, `workflow_checks`, `assistant_ready`, `ok`, `supported_spec`, `mempalace_version`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`
+- `verify`: `scope`, `state`, `verified_at`, `finding_counts`, `findings`, `recommended_actions`, `query_packets`, `source_snapshot`, `cache_path`
 - `maintain`: `kind`, `mode`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `source_inputs`, `generated_sections`
 
 Visible helper output is also supported on:
@@ -162,6 +173,7 @@ Visible helper output is also supported on:
 - `session --out <path>`
 - `context --out <path>`
 - `recap --out <path>`
+- `verify --out <path>`
 
 ## Maintenance Rule
 

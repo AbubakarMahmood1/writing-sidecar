@@ -32,10 +32,11 @@ The standalone CLI replaces the fork-only `mempalace writing-*` commands.
 - v3 adds `writing-sidecar maintain` and the `checkpoints` room
 - v4 adds `writing-sidecar session` as the default assistant workflow entrypoint
 - v5 adds phase-accurate `session` tasks for `braindump`, `scripting`, and `staging`
+- v6 adds `writing-sidecar verify` as the explicit continuity guard and cached continuity state for `doctor` / `projects`
 - startup no longer needs to be a manual `status` + `search` ritual unless you want lower-level control
 - sidecar-safe writeback is now explicit and preview-first instead of being a doc-only habit
 - JSON output is now stable enough for assistant glue through `--format json`
-- `context`, `recap`, and `session` can now write their rendered packets to explicit files with `--out`
+- `context`, `recap`, `session`, and `verify` can now write their rendered packets to explicit files with `--out`
 
 ## Recommended transition
 
@@ -43,20 +44,23 @@ The standalone CLI replaces the fork-only `mempalace writing-*` commands.
 2. Install `writing-sidecar`.
 3. Run `writing-sidecar doctor <vault> --project <name>`.
 4. Run `writing-sidecar session <vault> --project <name> --task startup`.
-5. When actual work begins, run `writing-sidecar session <vault> --project <name> --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`.
-6. Treat `planning` as a broad compatibility umbrella, not the preferred long-term phase name.
-7. Use `writing-sidecar search ...` only for targeted follow-up retrieval.
-8. Switch automation, docs, and habits from `mempalace writing-*` to `writing-sidecar *`.
+5. Run `writing-sidecar verify <vault> --project <name> --scope chapter|handoff|timeline` before risky continuity-sensitive transitions.
+6. When actual work begins, run `writing-sidecar session <vault> --project <name> --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`.
+7. Treat `planning` as a broad compatibility umbrella, not the preferred long-term phase name.
+8. Use `writing-sidecar search ...` only for targeted follow-up retrieval.
+9. Switch automation, docs, and habits from `mempalace writing-*` to `writing-sidecar *`.
 
 Lower-level commands still exist when you want narrower control:
 - `context`
 - `recap`
+- `verify`
 - `maintain`
 
 Examples:
 
 ```bash
 writing-sidecar session C:/vault --project Witcher-DC --task startup
+writing-sidecar verify C:/vault --project Witcher-DC --scope chapter
 writing-sidecar session C:/vault --project Witcher-DC --task scripting --write --out C:/vault/.sidecar-packets/scripting.txt
 writing-sidecar recap C:/vault --project Witcher-DC --mode restart
 writing-sidecar maintain C:/vault --project Witcher-DC --kind closeout --write

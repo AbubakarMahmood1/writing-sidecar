@@ -38,6 +38,7 @@ DEFAULT_SIDECAR_OUTPUT_DIRNAME = ".sidecars"
 DEFAULT_SIDECAR_PALACE_DIRNAME = ".palaces"
 DEFAULT_RUNTIME_DIRNAME = ".mempalace-sidecar-runtime"
 STATE_FILENAME = ".writing-sidecar-state.json"
+VERIFY_CACHE_FILENAME = ".writing-sidecar-verify.json"
 STATE_VERSION = 1
 SEARCH_MODE_ROOMS = {
     "planning": ("checkpoints", "brainstorms", "discarded_paths", "audits", "chat_process"),
@@ -48,6 +49,7 @@ SEARCH_MODE_ROOMS = {
 CONTEXT_MODES = ("startup", "planning", "audit", "history", "research")
 RECAP_MODES = ("restart", "handoff", "continuity")
 MAINTAIN_KINDS = ("checkpoint", "audit", "handoff", "discarded", "closeout")
+VERIFY_SCOPES = ("startup", "chapter", "handoff", "timeline", "full")
 SESSION_TASKS = (
     "startup",
     "braindump",
@@ -60,6 +62,18 @@ SESSION_TASKS = (
     "handoff",
     "closeout",
 )
+SESSION_VERIFY_SCOPES = {
+    "startup": "startup",
+    "braindump": "chapter",
+    "scripting": "chapter",
+    "staging": "chapter",
+    "planning": "chapter",
+    "prose": "chapter",
+    "audit": "chapter",
+    "debug": "chapter",
+    "handoff": "handoff",
+    "closeout": "handoff",
+}
 FIXED_ROOMS = (
     "chat_process",
     "checkpoints",
@@ -84,6 +98,51 @@ DOC_RELATIVE_PATHS = {
     "story_so_far": Path("_story_bible") / "01_Story_So_Far.md",
     "current_notes": Path("_story_bible") / "05_Current_Notes.md",
     "current_chapter_notes": Path("_story_bible") / "05_Current_Chapter_Notes.md",
+}
+VERIFY_DOC_RELATIVE_PATHS = {
+    "state_tracker": Path("_story_bible") / "02C_Character_State_Tracker.md",
+    "timeline": Path("_story_bible") / "06_Timeline.md",
+}
+VERIFY_SCOPE_SOURCE_KEYS = {
+    "startup": ("current_notes", "current_chapter_notes", "latest_checkpoint", "latest_handoff"),
+    "chapter": (
+        "current_notes",
+        "current_chapter_notes",
+        "story_so_far",
+        "state_tracker",
+        "timeline",
+        "latest_checkpoint",
+        "latest_handoff",
+    ),
+    "handoff": (
+        "current_notes",
+        "current_chapter_notes",
+        "state_tracker",
+        "latest_checkpoint",
+        "latest_handoff",
+        "latest_audit",
+        "latest_discarded",
+    ),
+    "timeline": (
+        "current_notes",
+        "current_chapter_notes",
+        "story_so_far",
+        "state_tracker",
+        "timeline",
+        "latest_checkpoint",
+        "latest_handoff",
+    ),
+    "full": (
+        "current_notes",
+        "current_chapter_notes",
+        "story_so_far",
+        "state_tracker",
+        "timeline",
+        "latest_checkpoint",
+        "latest_handoff",
+        "latest_audit",
+        "latest_discarded",
+    ),
 }
 PHASE_LOADOUT = {
     "BRAINDUMP": [
@@ -210,6 +269,76 @@ DOC_SECTION_HINTS = {
     "handoff_state": ("current focus", "what is actually ready", "cdlc status"),
     "handoff_risks": ("open work", "chapter goals", "threads carried forward"),
     "continuity_facts": ("continuity closeout", "threads carried forward"),
+}
+PLACEHOLDER_MARKERS = ("TODO", "TBD", "DRAFT")
+ARTIFACT_ADMIN_LABELS = {
+    "project",
+    "date",
+    "chapter",
+    "title",
+    "next chapter",
+    "context mode",
+    "result",
+    "status",
+    "final result",
+    "latest score",
+    "final cold audit score",
+    "sources used",
+    "source",
+}
+STATUS_TERMS = {
+    "active": "ACTIVE",
+    "open": "ACTIVE",
+    "in progress": "ACTIVE",
+    "ongoing": "ACTIVE",
+    "pending": "PENDING",
+    "watch": "PENDING",
+    "unresolved": "PENDING",
+    "resolved": "RESOLVED",
+    "closed": "RESOLVED",
+    "complete": "RESOLVED",
+    "done": "RESOLVED",
+    "pass": "RESOLVED",
+    "failed": "FAILED",
+    "fail": "FAILED",
+    "cut": "CUT",
+    "rejected": "CUT",
+    "discarded": "CUT",
+    "stale": "STALE",
+}
+ANCHOR_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "that",
+    "with",
+    "into",
+    "from",
+    "this",
+    "have",
+    "has",
+    "had",
+    "was",
+    "were",
+    "will",
+    "would",
+    "should",
+    "could",
+    "must",
+    "still",
+    "remain",
+    "remains",
+    "keep",
+    "keeps",
+    "make",
+    "makes",
+    "next",
+    "start",
+    "point",
+    "current",
+    "chapter",
+    "phase",
+    "status",
 }
 
 
@@ -1018,6 +1147,7 @@ def list_writing_projects(vault_dir: str) -> dict:
         doc_bundle = _load_live_doc_bundle(Path(status["project_root"]))
         operative_phase = _derive_operative_phase(doc_bundle, _extract_phase(doc_bundle))
         workflow_checks = _collect_workflow_checks(Path(status["project_root"]))
+        verification = _cached_verification_summary(Path(status["output_root"]))
         projects.append(
             {
                 "project": status["project"],
@@ -1030,6 +1160,10 @@ def list_writing_projects(vault_dir: str) -> dict:
                 "operative_phase": operative_phase,
                 "next_action": _extract_field(doc_bundle, "next_action"),
                 "assistant_ready": _assistant_ready(workflow_checks),
+                "continuity_state": verification["continuity_state"],
+                "last_verified_at": verification["last_verified_at"],
+                "finding_counts": verification["finding_counts"],
+                "verification_stale": verification["verification_stale"],
                 "room_counts": status.get("room_counts", {}),
                 "reasons": status.get("stale_reasons", []),
             }
@@ -1062,10 +1196,16 @@ def print_writing_projects(report: dict):
         if item.get("next_action"):
             print(f"    Next:   {item['next_action']}")
         print(f"    Ready:  {'YES' if item.get('assistant_ready') else 'NO'}")
+        continuity = (item.get("continuity_state") or "unknown").upper()
+        if item.get("verification_stale") and continuity != "UNKNOWN":
+            continuity = f"{continuity} (STALE)"
+        print(f"    Verify: {continuity}")
         if item.get("last_synced_at"):
             print(f"    Synced: {item['last_synced_at']}")
         if item.get("last_checkpoint_at"):
             print(f"    Checkpoint: {item['last_checkpoint_at']}")
+        if item.get("last_verified_at"):
+            print(f"    Verified: {item['last_verified_at']}")
         if item.get("reasons"):
             print("    Reasons:")
             for reason in item["reasons"]:
@@ -1457,6 +1597,14 @@ def build_writing_session(
     base["suggested_loadout"] = _derive_session_loadout(doc_bundle, raw_phase, task, operative_phase)
     if task not in {"handoff", "closeout"}:
         base.setdefault("recap_sections", recap_sections)
+    verification_scope = _verification_scope_for_task(task)
+    verification = _build_verification_report(
+        prepared,
+        scope=verification_scope,
+        n_results=n_results,
+        doc_bundle=doc_bundle,
+        write_cache=False,
+    )
 
     write_reports = []
     if write:
@@ -1548,6 +1696,12 @@ def build_writing_session(
     final_status["recent_artifacts"] = _collect_recent_artifacts(output_root)
     final_status["doc_highlights"] = _doc_highlights_payload(doc_bundle)
     final_status["source_priority"] = ["live_docs", "sidecar"]
+    final_status["verification_scope"] = verification_scope
+    final_status["continuity_state"] = verification["state"]
+    final_status["finding_counts"] = verification["finding_counts"]
+    final_status["top_findings"] = verification["findings"][:3]
+    final_status["recommended_repairs"] = verification["recommended_actions"][:5]
+    final_status["warnings"] = _unique_lines(final_status["warnings"] + verification.get("warnings", []))
 
     return final_status
 
@@ -1576,6 +1730,21 @@ def render_writing_session(session_data: dict) -> str:
         lines.append("\n  Warnings:")
         for warning in session_data["warnings"]:
             lines.append(f"    - {warning}")
+    if session_data.get("verification_scope"):
+        lines.append(
+            f"\n  Verification: {session_data.get('verification_scope')} -> {str(session_data.get('continuity_state', 'unknown')).upper()}"
+        )
+        counts = session_data.get("finding_counts") or {}
+        lines.append(
+            "    "
+            f"errors={counts.get('error', 0)} warns={counts.get('warn', 0)} info={counts.get('info', 0)}"
+        )
+        for item in session_data.get("top_findings", [])[:3]:
+            lines.append(f"    - [{item['severity'].upper()}] {item['title']}")
+        if session_data.get("recommended_repairs"):
+            lines.append("    Repairs:")
+            for item in session_data["recommended_repairs"][:3]:
+                lines.append(f"      - {item}")
 
     if session_data.get("recommended_actions"):
         lines.append("\n  Recommended actions:")
@@ -2722,20 +2891,27 @@ def _normalize_project_source(path: str, project_root: Path) -> str:
         return str(path)
 
 
+def _load_markdown_payload(path: Path) -> dict:
+    path = Path(path).expanduser().resolve()
+    exists = path.exists()
+    text = path.read_text(encoding="utf-8", errors="replace") if exists else ""
+    structure = _parse_markdown_doc(text)
+    stat = path.stat() if exists else None
+    return {
+        "path": str(path),
+        "exists": exists,
+        "text": text,
+        "highlights": structure["highlights"],
+        "fields": structure["fields"],
+        "sections": structure["sections"],
+        "mtime": stat.st_mtime if stat else None,
+    }
+
+
 def _load_live_doc_bundle(project_root: Path) -> dict:
     bundle = {}
     for name, relative_path in DOC_RELATIVE_PATHS.items():
-        path = project_root / relative_path
-        text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-        structure = _parse_markdown_doc(text)
-        bundle[name] = {
-            "path": str(path),
-            "exists": path.exists(),
-            "text": text,
-            "highlights": structure["highlights"],
-            "fields": structure["fields"],
-            "sections": structure["sections"],
-        }
+        bundle[name] = _load_markdown_payload(project_root / relative_path)
     return bundle
 
 
@@ -2835,6 +3011,36 @@ def _is_low_value_doc_line(line: str) -> bool:
     if any(lowered.startswith(_normalize_heading_key(prefix)) for prefix in LOW_VALUE_LINE_PREFIXES):
         return True
     return any(_normalize_heading_key(fragment) in lowered for fragment in LOW_VALUE_LINE_SUBSTRINGS)
+
+
+def _has_placeholder_marker(line: str) -> bool:
+    cleaned = _clean_highlight_line(line)
+    if not cleaned:
+        return False
+    label, value = _split_labeled_line(cleaned)
+    normalized_value = _normalize_heading_key(value or "")
+    if normalized_value in {"todo", "tbd", "draft"}:
+        return True
+    if re.match(r"^(?:\[\s*)?(TODO|TBD|DRAFT)(?:\s*\])?(?:\s*[:\-]|$)", cleaned, flags=re.IGNORECASE):
+        return True
+    return bool(re.search(r"(?:\(|\[)(TODO|TBD|DRAFT)(?:\)|\])", cleaned, flags=re.IGNORECASE))
+
+
+def _is_low_signal_artifact_line(line: str) -> bool:
+    cleaned = _clean_highlight_line(line)
+    if not cleaned or _is_low_value_doc_line(cleaned):
+        return True
+    label, _ = _split_labeled_line(cleaned)
+    if label and _normalize_heading_key(label) in ARTIFACT_ADMIN_LABELS:
+        return True
+    lowered = cleaned.lower()
+    if cleaned.endswith(":"):
+        return True
+    if lowered.startswith("this is a sidecar-only") or lowered.startswith("this file archives rejected"):
+        return True
+    if re.search(r"\.(?:txt|md)\b", cleaned, flags=re.IGNORECASE):
+        return True
+    return False
 
 
 def _split_labeled_line(line: str) -> tuple[str | None, str | None]:
@@ -3710,6 +3916,734 @@ def _collect_recent_artifacts(output_root: Path, limit: int = 5) -> list[dict]:
     return items[:limit]
 
 
+def _missing_markdown_payload(path: Path) -> dict:
+    path = Path(path).expanduser().resolve()
+    return {
+        "path": str(path),
+        "exists": False,
+        "text": "",
+        "highlights": [],
+        "fields": {},
+        "sections": {"_root": []},
+        "mtime": None,
+    }
+
+
+def _latest_markdown_payload(root: Path) -> dict:
+    root = Path(root).expanduser().resolve()
+    if not root.exists():
+        return _missing_markdown_payload(root)
+    files = [path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in {".md", ".txt"}]
+    if not files:
+        return _missing_markdown_payload(root)
+    latest = max(files, key=lambda path: path.stat().st_mtime)
+    return _load_markdown_payload(latest)
+
+
+def _extract_field_from_payload(payload: dict, field_name: str) -> str | None:
+    canonical = _canonical_field_key(field_name)
+    for entry in payload.get("fields", {}).get(canonical, []):
+        value = entry.get("value")
+        if value:
+            return value
+    return None
+
+
+def _canonical_state_value(value: str | None) -> str | None:
+    cleaned = _normalize_heading_key(value or "")
+    if not cleaned:
+        return None
+    for key, canonical in STATUS_TERMS.items():
+        if key in cleaned:
+            return canonical
+    return cleaned.upper() if cleaned else None
+
+
+def _phase_hint_from_text(*texts: str) -> str | None:
+    combined = " ".join(text for text in texts if text).lower()
+    if not combined:
+        return None
+    if any(token in combined for token in ("debug", "repair pass", "dominant failure", "revision priority")):
+        return "DEBUG"
+    if any(token in combined for token in ("audit", "cold audit", "latest score", "final checklist")):
+        return "AUDIT"
+    if any(token in combined for token in ("staging", "scene geometry", "internal pressure", "sensory", "subtext", "atmosphere")):
+        return "STAGING"
+    if any(token in combined for token in ("braindump", "brainstorm", "ideation")):
+        return "BRAINDUMP"
+    if any(
+        token in combined
+        for token in (
+            "scripting",
+            "scene design",
+            "wireframe",
+            "beat sheet",
+            "beat map",
+            "structure",
+            "planning",
+            "plan the chapter",
+            "compile",
+        )
+    ):
+        return "SCRIPTING"
+    if any(token in combined for token in ("prose", "draft", "write the chapter", "drafting")):
+        return "PROSE"
+    if any(token in combined for token in ("complete", "closeout", "done")):
+        return "COMPLETE"
+    return None
+
+
+def _anchor_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9']+", text.lower())
+        if len(token) > 2 and token not in ANCHOR_STOPWORDS
+    }
+
+
+def _anchor_overlap(text: str, corpus_tokens: set[str]) -> int:
+    return len(_anchor_tokens(text) & corpus_tokens)
+
+
+def _payload_lines(payload: dict) -> list[str]:
+    lines = []
+    for items in payload.get("sections", {}).values():
+        lines.extend(items)
+    lines.extend(payload.get("highlights", []))
+    return _unique_lines(lines)
+
+
+def _extract_status_rows(payload: dict, source_name: str) -> list[dict]:
+    rows = []
+    for title, items in payload.get("sections", {}).items():
+        if not items:
+            continue
+        title_key = _normalize_heading_key(title)
+        relevant = any(
+            keyword in title_key
+            for keyword in ("thread", "state", "continuity", "tracker", "closeout", "handoff", "watch out")
+        )
+        if not relevant and title != "_root":
+            continue
+        for item in items:
+            cleaned = _clean_highlight_line(item)
+            if " — " not in cleaned:
+                continue
+            parts = [part.strip() for part in cleaned.split(" — ") if part.strip()]
+            if len(parts) < 2:
+                continue
+            key = _normalize_heading_key(parts[0])
+            status = _canonical_state_value(parts[1])
+            if not key or not status:
+                continue
+            rows.append(
+                {
+                    "key": key,
+                    "label": parts[0],
+                    "status": status,
+                    "line": cleaned,
+                    "source": source_name,
+                    "path": payload.get("path"),
+                }
+            )
+    return rows
+
+
+def _make_finding(
+    *,
+    severity: str,
+    kind: str,
+    title: str,
+    summary: str,
+    sources: Sequence[str],
+    evidence: Sequence[str],
+    suggested_fix: str,
+) -> dict:
+    fingerprint = json.dumps(
+        {
+            "severity": severity,
+            "kind": kind,
+            "title": title,
+            "summary": summary,
+            "sources": list(sources),
+            "evidence": list(evidence),
+        },
+        sort_keys=True,
+    )
+    return {
+        "id": hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()[:12],
+        "severity": severity,
+        "kind": kind,
+        "title": title,
+        "summary": summary,
+        "sources": list(sources),
+        "evidence": list(evidence),
+        "suggested_fix": suggested_fix,
+    }
+
+
+def _verification_state(findings: Sequence[dict]) -> str:
+    if any(item["severity"] == "error" for item in findings):
+        return "error"
+    if any(item["severity"] == "warn" for item in findings):
+        return "warn"
+    return "clean"
+
+
+def _finding_counts(findings: Sequence[dict]) -> dict:
+    return {
+        "error": sum(1 for item in findings if item["severity"] == "error"),
+        "warn": sum(1 for item in findings if item["severity"] == "warn"),
+        "info": sum(1 for item in findings if item["severity"] == "info"),
+    }
+
+
+def _verification_scope_for_task(task: str) -> str:
+    return SESSION_VERIFY_SCOPES[task]
+
+
+def _build_verify_source_bundle(project_root: Path, doc_bundle: dict) -> dict:
+    bundle = dict(doc_bundle)
+    for name, relative_path in VERIFY_DOC_RELATIVE_PATHS.items():
+        bundle[name] = _load_markdown_payload(project_root / relative_path)
+    bundle["latest_checkpoint"] = _latest_markdown_payload(project_root / "logs" / "checkpoints")
+    bundle["latest_handoff"] = _latest_markdown_payload(project_root / "logs" / "brainstorms")
+    bundle["latest_audit"] = _latest_markdown_payload(project_root / "logs" / "audits")
+    bundle["latest_discarded"] = _latest_markdown_payload(project_root / "logs" / "discarded_paths")
+    return bundle
+
+
+def _verification_source_paths(status: dict, bundle: dict, scope: str) -> list[Path]:
+    manifest_path = status.get("manifest_path")
+    paths = [Path(manifest_path)] if manifest_path else [Path(status["output_root"]) / STATE_FILENAME]
+    keys = VERIFY_SCOPE_SOURCE_KEYS[scope]
+    for key in keys:
+        payload = bundle.get(key)
+        if not payload or not payload.get("path"):
+            continue
+        path = Path(payload["path"])
+        if payload.get("exists"):
+            paths.append(path)
+        elif key.startswith("latest_"):
+            paths.append(path)
+        else:
+            paths.append(path)
+    return paths
+
+
+def _select_verify_queries(doc_bundle: dict, project: str, scope: str) -> list[dict]:
+    if scope == "startup":
+        return _select_context_queries(doc_bundle, project, "startup")
+    if scope == "chapter":
+        return [
+            {"mode": "planning", "query": _collect_mode_queries(doc_bundle, project, "planning")[0]},
+            {"mode": "history", "query": _collect_mode_queries(doc_bundle, project, "history")[0]},
+        ]
+    if scope == "handoff":
+        return _select_recap_queries(doc_bundle, project, "handoff")
+    if scope == "timeline":
+        return [
+            {
+                "mode": "history",
+                "query": _pick_signal_query(
+                    doc_bundle,
+                    ("story_so_far", "current_notes", "current_chapter_notes"),
+                    section_keywords=("continuity closeout", "threads carried forward", "timeline"),
+                    field_names=("status", "next_action"),
+                    keywords=("timeline", "after", "before", "chronology", "continuity"),
+                )
+                or _fallback_query(project, "history"),
+            }
+        ]
+    plans = (
+        _select_verify_queries(doc_bundle, project, "startup")
+        + _select_verify_queries(doc_bundle, project, "chapter")
+        + _select_verify_queries(doc_bundle, project, "handoff")
+        + [{"mode": "research", "query": _fallback_query(project, "research")}]
+    )
+    unique = []
+    seen = set()
+    for item in plans:
+        key = (item["mode"], item["query"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def _live_corpus_tokens(bundle: dict, scope: str) -> set[str]:
+    tokens = set()
+    for key in VERIFY_SCOPE_SOURCE_KEYS[scope]:
+        if key not in {"current_notes", "current_chapter_notes", "story_so_far", "state_tracker", "timeline"}:
+            continue
+        payload = bundle.get(key, {})
+        for line in _payload_lines(payload):
+            tokens.update(_anchor_tokens(line))
+    return tokens
+
+
+def _collect_placeholder_findings(bundle: dict) -> list[dict]:
+    findings = []
+    for key in ("current_notes", "current_chapter_notes"):
+        payload = bundle.get(key, {})
+        if not payload.get("exists"):
+            continue
+        lines = [line for line in _payload_lines(payload) if _has_placeholder_marker(line)]
+        if not lines:
+            continue
+        findings.append(
+            _make_finding(
+                severity="warn",
+                kind="placeholder_active",
+                title=f"Active placeholder markers in {key.replace('_', ' ')}",
+                summary="Active current-doc sections still contain TODO/TBD/DRAFT markers.",
+                sources=[payload["path"]],
+                evidence=lines[:3],
+                suggested_fix="Resolve or retire the placeholder markers in the active live docs before the next risky phase transition.",
+            )
+        )
+    return findings
+
+
+def _collect_phase_and_identity_findings(bundle: dict) -> list[dict]:
+    findings = []
+    current_notes = bundle["current_notes"]
+    current_chapter = bundle["current_chapter_notes"]
+    raw_phase = _extract_field_from_payload(current_chapter, "phase")
+    status_hint = _phase_hint_from_text(
+        _extract_field_from_payload(current_notes, "status") or "",
+        _extract_field_from_payload(current_notes, "next_action") or "",
+        " ".join(current_notes.get("highlights", [])[:4]),
+    )
+    raw_phase = raw_phase.upper() if raw_phase else None
+    if raw_phase and status_hint and raw_phase != status_hint:
+        allowed_transition = raw_phase == "COMPLETE" and status_hint in {"BRAINDUMP", "SCRIPTING", "STAGING"}
+        if not allowed_transition:
+            severity = "error" if raw_phase in {"BRAINDUMP", "SCRIPTING", "STAGING", "PROSE", "AUDIT", "DEBUG"} else "warn"
+            findings.append(
+                _make_finding(
+                    severity=severity,
+                    kind="phase_drift",
+                    title="Current docs disagree about the active phase",
+                    summary=f"Current chapter notes say `{raw_phase}` while current notes point to `{status_hint}` as the real next move.",
+                    sources=[current_notes["path"], current_chapter["path"]],
+                    evidence=[
+                        f"Current notes status: {_extract_field_from_payload(current_notes, 'status') or 'n/a'}",
+                        f"Current notes next action: {_extract_field_from_payload(current_notes, 'next_action') or 'n/a'}",
+                        f"Current chapter phase: {raw_phase}",
+                    ],
+                    suggested_fix="Align the active phase and next-action language across the live current docs before moving on.",
+                )
+            )
+
+    current_notes_chapter = _extract_field_from_payload(current_notes, "chapter")
+    chapter_notes_chapter = _extract_field_from_payload(current_chapter, "chapter")
+    if current_notes_chapter and chapter_notes_chapter:
+        left_num = _extract_numeric_chapter(current_notes_chapter)
+        right_num = _extract_numeric_chapter(chapter_notes_chapter)
+        mismatch = False
+        if left_num is not None and right_num is not None:
+            mismatch = left_num != right_num
+        elif _normalize_heading_key(current_notes_chapter) != _normalize_heading_key(chapter_notes_chapter):
+            mismatch = True
+        if mismatch:
+            findings.append(
+                _make_finding(
+                    severity="error",
+                    kind="chapter_identity_mismatch",
+                    title="Current docs disagree about chapter identity",
+                    summary="The live current docs point at different current chapter identifiers.",
+                    sources=[current_notes["path"], current_chapter["path"]],
+                    evidence=[
+                        f"Current notes chapter: {current_notes_chapter}",
+                        f"Current chapter notes chapter: {chapter_notes_chapter}",
+                    ],
+                    suggested_fix="Make the current chapter number/title consistent across the live current docs.",
+                )
+            )
+
+    current_notes_arc = _extract_field_from_payload(current_notes, "arc")
+    chapter_notes_arc = _extract_field_from_payload(current_chapter, "arc")
+    if current_notes_arc and chapter_notes_arc and _normalize_heading_key(current_notes_arc) != _normalize_heading_key(chapter_notes_arc):
+        findings.append(
+            _make_finding(
+                severity="error",
+                kind="arc_mismatch",
+                title="Current docs disagree about the active arc",
+                summary="The live current docs point at different active arc labels.",
+                sources=[current_notes["path"], current_chapter["path"]],
+                evidence=[
+                    f"Current notes arc: {current_notes_arc}",
+                    f"Current chapter notes arc: {chapter_notes_arc}",
+                ],
+                suggested_fix="Align the active arc label across the live current docs.",
+            )
+        )
+    return findings
+
+
+def _collect_state_conflict_findings(bundle: dict, scope: str) -> list[dict]:
+    findings = []
+    if scope not in {"chapter", "handoff", "timeline", "full"}:
+        return findings
+    tracker = bundle.get("state_tracker", {})
+    if not tracker.get("exists"):
+        findings.append(
+            _make_finding(
+                severity="warn",
+                kind="coverage_gap",
+                title="Character state tracker is missing",
+                summary="This verification scope expects a current character/state tracker but none was found.",
+                sources=[tracker.get("path") or "_story_bible/02C_Character_State_Tracker.md"],
+                evidence=["_story_bible/02C_Character_State_Tracker.md is missing."],
+                suggested_fix="Add or refresh `_story_bible/02C_Character_State_Tracker.md` before relying on continuity verification for state-sensitive work.",
+            )
+        )
+        return findings
+
+    tracker_rows = {row["key"]: row for row in _extract_status_rows(tracker, "state_tracker")}
+    live_rows = {}
+    for key in ("current_notes", "current_chapter_notes", "story_so_far"):
+        payload = bundle.get(key, {})
+        for row in _extract_status_rows(payload, key):
+            live_rows.setdefault(row["key"], row)
+
+    for row_key, tracker_row in tracker_rows.items():
+        live_row = live_rows.get(row_key)
+        if not live_row or live_row["status"] == tracker_row["status"]:
+            continue
+        findings.append(
+            _make_finding(
+                severity="error",
+                kind="current_state_conflict",
+                title=f"Explicit state conflict for {tracker_row['label']}",
+                summary="The live current docs disagree with the structured state tracker about an active tracked thread/entity.",
+                sources=[tracker_row["path"], live_row["path"]],
+                evidence=[f"State tracker: {tracker_row['line']}", f"Live docs: {live_row['line']}"],
+                suggested_fix="Reconcile the tracker row and the live current-doc state so the same thread/entity does not carry two explicit statuses.",
+            )
+        )
+    return findings
+
+
+def _collect_artifact_staleness_findings(bundle: dict, scope: str) -> list[dict]:
+    findings = []
+    current_doc_mtime = max((bundle[key].get("mtime") or 0) for key in ("current_notes", "current_chapter_notes"))
+
+    checkpoint = bundle.get("latest_checkpoint", {})
+    if scope in {"startup", "chapter", "handoff", "full"}:
+        if not checkpoint.get("exists"):
+            findings.append(
+                _make_finding(
+                    severity="warn",
+                    kind="checkpoint_stale",
+                    title="No checkpoint artifact exists yet",
+                    summary="There is no checkpoint artifact to anchor the latest session state.",
+                    sources=[checkpoint.get("path") or "logs/checkpoints"],
+                    evidence=["No checkpoint file was found under logs/checkpoints/."],
+                    suggested_fix="Write a checkpoint artifact before the next risky transition.",
+                )
+            )
+        elif (checkpoint.get("mtime") or 0) < current_doc_mtime:
+            findings.append(
+                _make_finding(
+                    severity="warn",
+                    kind="checkpoint_stale",
+                    title="Checkpoint artifact is older than the live current docs",
+                    summary="The checkpoint no longer reflects the latest current-doc state.",
+                    sources=[checkpoint["path"], bundle["current_notes"]["path"], bundle["current_chapter_notes"]["path"]],
+                    evidence=[f"Latest checkpoint: {checkpoint['path']}"],
+                    suggested_fix="Refresh the checkpoint after the current planning/prose/audit changes settle.",
+                )
+            )
+
+    handoff = bundle.get("latest_handoff", {})
+    if scope in {"startup", "handoff", "full"}:
+        if not handoff.get("exists"):
+            findings.append(
+                _make_finding(
+                    severity="warn",
+                    kind="handoff_stale",
+                    title="No handoff artifact exists yet",
+                    summary="There is no brainstorm/handoff artifact capturing the carry-forward session state.",
+                    sources=[handoff.get("path") or "logs/brainstorms"],
+                    evidence=["No handoff file was found under logs/brainstorms/."],
+                    suggested_fix="Write a handoff artifact before the next session transition or closeout.",
+                )
+            )
+        elif (handoff.get("mtime") or 0) < current_doc_mtime and scope in {"handoff", "full"}:
+            findings.append(
+                _make_finding(
+                    severity="warn",
+                    kind="handoff_stale",
+                    title="Handoff artifact is older than the live current docs",
+                    summary="The handoff no longer matches the latest carry-forward state in the live docs.",
+                    sources=[handoff["path"], bundle["current_notes"]["path"], bundle["current_chapter_notes"]["path"]],
+                    evidence=[f"Latest handoff: {handoff['path']}"],
+                    suggested_fix="Refresh the handoff artifact before ending the session or passing work forward.",
+                )
+            )
+    return findings
+
+
+def _collect_sidecar_and_timeline_findings(status: dict, bundle: dict, scope: str, query_packets: list[dict]) -> list[dict]:
+    findings = []
+    if status.get("stale") and scope in {"chapter", "handoff", "timeline", "full"}:
+        findings.append(
+            _make_finding(
+                severity="warn",
+                kind="sidecar_stale",
+                title="Sidecar evidence is stale",
+                summary="This verification scope depends on sidecar memory, but the sidecar status is stale.",
+                sources=[status["manifest_path"]],
+                evidence=[item["reason"] for item in status.get("stale_reasons", [])[:5]] or ["Sidecar is stale."],
+                suggested_fix="Run `writing-sidecar sync` before relying on sidecar-backed continuity evidence.",
+            )
+        )
+
+    timeline = bundle.get("timeline", {})
+    if scope in {"timeline", "full"} and not timeline.get("exists"):
+        findings.append(
+            _make_finding(
+                severity="warn",
+                kind="timeline_gap",
+                title="Timeline coverage is missing",
+                summary="Timeline verification was requested, but no timeline doc exists.",
+                sources=[timeline.get("path") or "_story_bible/06_Timeline.md"],
+                evidence=["_story_bible/06_Timeline.md is missing."],
+                suggested_fix="Add or refresh `_story_bible/06_Timeline.md` before depending on timeline verification.",
+            )
+        )
+    elif scope in {"timeline", "full"} and timeline.get("exists"):
+        timeline_tokens = _anchor_tokens(timeline.get("text", ""))
+        chronology_lines = _section_from_docs(
+            bundle,
+            ("current_notes", "current_chapter_notes", "story_so_far"),
+            section_keywords=("continuity closeout", "threads carried forward", "timeline"),
+            keywords=("after", "before", "timeline", "chronology", "arrival", "search", "alert"),
+            max_items=4,
+        )
+        gaps = [line for line in chronology_lines if _anchor_overlap(line, timeline_tokens) < 2]
+        if gaps:
+            findings.append(
+                _make_finding(
+                    severity="warn",
+                    kind="timeline_gap",
+                    title="Current chronology lines are weakly represented in the timeline doc",
+                    summary="Some active chronology-sensitive lines are not clearly reflected in the timeline source.",
+                    sources=[timeline["path"], bundle["current_notes"]["path"], bundle["current_chapter_notes"]["path"]],
+                    evidence=gaps[:3],
+                    suggested_fix="Refresh the timeline doc so the active chronology-sensitive lines are represented explicitly.",
+                )
+            )
+
+    if scope in {"chapter", "handoff", "timeline", "full"} and not query_packets:
+        findings.append(
+            _make_finding(
+                severity="info",
+                kind="coverage_gap",
+                title="No sidecar evidence was retrieved for this verification pass",
+                summary="The verifier relied on live docs only because no sidecar retrieval evidence was available.",
+                sources=[status["palace_path"]],
+                evidence=["No sidecar query packets returned evidence."],
+                suggested_fix="Run `writing-sidecar sync` and verify again if you expected sidecar carry-forward evidence.",
+            )
+        )
+    return findings
+
+
+def _collect_carry_forward_gap_findings(bundle: dict, scope: str) -> list[dict]:
+    findings = []
+    if scope not in {"startup", "chapter", "handoff", "full"}:
+        return findings
+    live_tokens = _live_corpus_tokens(bundle, scope)
+    artifact_lines = []
+    for key in ("latest_checkpoint", "latest_handoff", "latest_audit", "latest_discarded"):
+        payload = bundle.get(key, {})
+        if not payload.get("exists"):
+            continue
+        artifact_lines.extend(_payload_lines(payload))
+    candidate_lines = []
+    for line in _unique_lines(artifact_lines):
+        cleaned = _clean_highlight_line(line)
+        if _is_low_signal_artifact_line(cleaned):
+            continue
+        if len(_anchor_tokens(cleaned)) < 2:
+            continue
+        if _anchor_overlap(cleaned, live_tokens) >= 2:
+            continue
+        candidate_lines.append(cleaned)
+    if candidate_lines:
+        findings.append(
+            _make_finding(
+                severity="warn",
+                kind="carry_forward_gap",
+                title="Artifact carry-forward lines are missing from the active live docs",
+                summary="Recent checkpoint/handoff/audit/discarded artifacts mention carry-forward material that is not clearly visible in the active live docs.",
+                sources=[
+                    payload["path"]
+                    for key, payload in bundle.items()
+                    if key.startswith("latest_") and payload.get("exists")
+                ][:4],
+                evidence=candidate_lines[:3],
+                suggested_fix="Move the still-active carry-forward threads or guardrails into the live current docs so the next session does not rely on artifacts alone.",
+            )
+        )
+    return findings
+
+
+def _collect_verify_findings(status: dict, bundle: dict, scope: str, query_packets: list[dict]) -> list[dict]:
+    findings = []
+    findings.extend(_collect_phase_and_identity_findings(bundle))
+    findings.extend(_collect_state_conflict_findings(bundle, scope))
+    findings.extend(_collect_artifact_staleness_findings(bundle, scope))
+    findings.extend(_collect_sidecar_and_timeline_findings(status, bundle, scope, query_packets))
+    findings.extend(_collect_carry_forward_gap_findings(bundle, scope))
+    findings.extend(_collect_placeholder_findings(bundle))
+    return findings
+
+
+def _verification_scope_warnings(status: dict, findings: Sequence[dict]) -> list[str]:
+    warnings = []
+    if status.get("stale"):
+        warnings.append("sidecar is stale; verification findings that depend on sidecar memory may be incomplete.")
+    if any(item["kind"] == "coverage_gap" for item in findings):
+        warnings.append("verification coverage was incomplete; review the coverage-gap findings before trusting a clean result.")
+    return _unique_lines(warnings)
+
+
+def _build_verification_report(
+    prepared: dict,
+    *,
+    scope: str,
+    n_results: int,
+    doc_bundle: dict | None = None,
+    write_cache: bool,
+) -> dict:
+    if scope not in VERIFY_SCOPES:
+        raise ValueError(f"Unknown writing verification scope: {scope}")
+    status = prepared["status"]
+    project_root = Path(status["project_root"])
+    doc_bundle = doc_bundle or _load_live_doc_bundle(project_root)
+    verify_bundle = _build_verify_source_bundle(project_root, doc_bundle)
+    query_plan = _select_verify_queries(doc_bundle, status["project"], scope)
+    warnings = list(prepared["warnings"])
+    packets = _run_sidecar_queries(status, query_plan, n_results=n_results, warnings=warnings, curated_for_context=True)
+    findings = _collect_verify_findings(status, verify_bundle, scope, packets)
+    report = {
+        "project": status["project"],
+        "project_root": status["project_root"],
+        "vault_root": status["vault_root"],
+        "scope": scope,
+        "state": _verification_state(findings),
+        "verified_at": _utcnow_iso(),
+        "last_synced_at": status.get("last_synced_at"),
+        "finding_counts": _finding_counts(findings),
+        "findings": findings,
+        "warnings": _unique_lines(warnings + _verification_scope_warnings(status, findings)),
+        "recommended_actions": _unique_lines([item["suggested_fix"] for item in findings if item.get("suggested_fix")]),
+        "query_packets": packets,
+        "source_snapshot": _build_source_snapshot(_verification_source_paths(status, verify_bundle, scope)),
+        "cache_path": str(_verification_cache_path(Path(status["output_root"]))),
+        "sync_summary": prepared.get("sync_summary"),
+        "synced": prepared.get("synced", False),
+    }
+    if write_cache:
+        cache_payload = {
+            "project": report["project"],
+            "project_root": report["project_root"],
+            "vault_root": report["vault_root"],
+            "scope": report["scope"],
+            "verified_at": report["verified_at"],
+            "state": report["state"],
+            "finding_counts": report["finding_counts"],
+            "findings": report["findings"],
+            "last_synced_at": report["last_synced_at"],
+            "source_snapshot": report["source_snapshot"],
+        }
+        cache_path = Path(report["cache_path"])
+        _ensure_dir(cache_path.parent)
+        cache_path.write_text(json.dumps(cache_payload, indent=2), encoding="utf-8")
+    return report
+
+
+def verify_writing_sidecar(
+    vault_dir: str,
+    project: str | None = None,
+    out_dir: str = None,
+    codex_home: str = None,
+    config_path: str = None,
+    brainstorm_paths=None,
+    audit_paths=None,
+    discarded_paths=None,
+    palace_path: str = None,
+    runtime_root: str = None,
+    sync: str = "if-needed",
+    refresh_palace: bool = False,
+    scope: str = "chapter",
+    n_results: int = 3,
+) -> dict:
+    prepared = prepare_writing_sidecar(
+        vault_dir=vault_dir,
+        project=project,
+        out_dir=out_dir,
+        codex_home=codex_home,
+        config_path=config_path,
+        brainstorm_paths=brainstorm_paths,
+        audit_paths=audit_paths,
+        discarded_paths=discarded_paths,
+        palace_path=palace_path,
+        runtime_root=runtime_root,
+        sync=sync,
+        refresh_palace=refresh_palace,
+    )
+    return _build_verification_report(prepared, scope=scope, n_results=n_results, write_cache=True)
+
+
+def render_writing_verify(report: dict) -> str:
+    lines = [
+        "",
+        "=" * 60,
+        f"  Writing Sidecar Verify ({report['scope']})",
+        "=" * 60,
+        f"  Project:  {report['project_root']}",
+        f"  State:    {report['state'].upper()}",
+        f"  Verified: {report['verified_at']}",
+    ]
+    if report.get("last_synced_at"):
+        lines.append(f"  Synced:   {report['last_synced_at']}")
+    if report.get("warnings"):
+        lines.append("\n  Warnings:")
+        for warning in report["warnings"]:
+            lines.append(f"    - {warning}")
+    lines.append(
+        "\n  Finding counts: "
+        f"errors={report['finding_counts']['error']} "
+        f"warns={report['finding_counts']['warn']} "
+        f"info={report['finding_counts']['info']}"
+    )
+    if report.get("recommended_actions"):
+        lines.append("\n  Recommended repairs:")
+        for item in report["recommended_actions"][:5]:
+            lines.append(f"    - {item}")
+    if report.get("findings"):
+        lines.append("\n  Findings:")
+        for item in report["findings"]:
+            lines.append(f"    [{item['severity'].upper()}] {item['kind']} :: {item['title']}")
+            lines.append(f"      {item['summary']}")
+            for evidence in item.get("evidence", [])[:3]:
+                lines.append(f"      - {evidence}")
+    else:
+        lines.append("\n  Findings:\n    - none")
+    lines.extend(["", "=" * 60, ""])
+    return "\n".join(lines)
+
+
+def print_writing_verify(report: dict):
+    print(render_writing_verify(report))
+
+
 def _build_recap_sections(doc_bundle: dict, results: list[dict], phase: str | None, mode: str) -> dict:
     used = set()
 
@@ -4348,6 +5282,43 @@ def _describe_optional_file(path: Path | None):
     return described
 
 
+def _describe_source_path(path: Path | None):
+    if not path:
+        return None
+    path = Path(path).expanduser().resolve()
+    if not path.exists():
+        return {
+            "path": str(path),
+            "type": "missing",
+            "size": None,
+            "mtime": None,
+            "sha256": None,
+            "entries": 0,
+        }
+    if path.is_file():
+        described = _describe_file(path)
+        described.update({"path": str(path), "type": "file", "entries": 1})
+        return described
+
+    latest_mtime = None
+    entries = []
+    for child in sorted(path.rglob("*")):
+        if not child.is_file():
+            continue
+        stat = child.stat()
+        latest_mtime = stat.st_mtime if latest_mtime is None else max(latest_mtime, stat.st_mtime)
+        entries.append(f"{child.relative_to(path).as_posix()}:{stat.st_size}:{stat.st_mtime}")
+    digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
+    return {
+        "path": str(path),
+        "type": "dir",
+        "size": None,
+        "mtime": latest_mtime,
+        "sha256": digest,
+        "entries": len(entries),
+    }
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as f:
@@ -4358,6 +5329,78 @@ def _sha256_file(path: Path) -> str:
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _verification_cache_path(output_root: Path) -> Path:
+    return Path(output_root).expanduser().resolve() / VERIFY_CACHE_FILENAME
+
+
+def _load_verify_cache(cache_path: Path) -> dict | None:
+    cache_path = Path(cache_path).expanduser().resolve()
+    if not cache_path.exists():
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _build_source_snapshot(paths: Sequence[Path | str]) -> list[dict]:
+    snapshot = []
+    seen = set()
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        path = Path(raw_path).expanduser().resolve()
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        described = _describe_source_path(path)
+        if described:
+            snapshot.append(described)
+    return snapshot
+
+
+def _verification_cache_is_stale(cache: dict | None) -> bool:
+    if not cache:
+        return True
+    verified_at = cache.get("verified_at")
+    if not verified_at:
+        return True
+    snapshot = cache.get("source_snapshot", [])
+    if not snapshot:
+        return True
+    for item in snapshot:
+        path = item.get("path")
+        if not path:
+            return True
+        current = _describe_source_path(Path(path))
+        if current != item:
+            return True
+    return False
+
+
+def _cached_verification_summary(output_root: Path) -> dict:
+    cache_path = _verification_cache_path(output_root)
+    cache = _load_verify_cache(cache_path)
+    stale = _verification_cache_is_stale(cache)
+    if not cache:
+        return {
+            "continuity_state": "unknown",
+            "last_verified_at": None,
+            "finding_counts": {"error": 0, "warn": 0, "info": 0},
+            "verification_stale": True,
+            "verify_cache_path": str(cache_path),
+        }
+    return {
+        "continuity_state": cache.get("state", "unknown"),
+        "last_verified_at": cache.get("verified_at"),
+        "finding_counts": cache.get("finding_counts", {"error": 0, "warn": 0, "info": 0}),
+        "verification_stale": stale,
+        "verify_cache_path": str(cache_path),
+    }
 
 
 def _mine_exported_sidecar(
@@ -4856,6 +5899,7 @@ def doctor_writing_sidecar(
     project_root = Path(context["project_root"])
     workflow_checks = _collect_workflow_checks(project_root)
     assistant_ready = _assistant_ready(workflow_checks)
+    verification = _cached_verification_summary(Path(context["output_root"]))
 
     if version is None:
         checks.append(
@@ -4941,6 +5985,10 @@ def doctor_writing_sidecar(
         "checks": checks,
         "workflow_checks": workflow_checks,
         "assistant_ready": assistant_ready,
+        "continuity_state": verification["continuity_state"],
+        "last_verified_at": verification["last_verified_at"],
+        "finding_counts": verification["finding_counts"],
+        "verification_stale": verification["verification_stale"],
         "ok": not any(item["status"] == "fail" for item in checks + workflow_checks),
     }
     return report
@@ -4986,6 +6034,15 @@ def print_doctor_report(report: dict):
             print(f"    {status:5} {label:20} {detail}")
 
     print(f"\n  Assistant ready: {'YES' if report.get('assistant_ready') else 'NO'}")
+    continuity = (report.get("continuity_state") or "unknown").upper()
+    if report.get("verification_stale") and continuity != "UNKNOWN":
+        continuity = f"{continuity} (STALE)"
+    print(f"  Continuity:      {continuity}")
+    if report.get("last_verified_at"):
+        print(f"  Last verified:   {report['last_verified_at']}")
+    if report.get("finding_counts"):
+        counts = report["finding_counts"]
+        print(f"  Findings:        errors={counts['error']} warns={counts['warn']} info={counts['info']}")
     print(f"\n  Result: {'PASS' if report['ok'] else 'FAIL'}")
     print(f"\n{'=' * 55}\n")
 

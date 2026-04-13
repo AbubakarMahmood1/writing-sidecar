@@ -51,6 +51,7 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 - use `writing-sidecar recap --mode restart` after a long break
 - use `writing-sidecar recap --mode handoff` before handing work to another assistant or another session
 - use `writing-sidecar recap --mode continuity` when the main risk is drift, obligations, or timeline confusion
+- use `writing-sidecar verify --scope chapter|handoff|timeline` before continuity-sensitive transitions
 - use lower-level `maintain` only when you need narrower control than `session --task ... --write`
 
 ## Startup-first flow
@@ -59,9 +60,10 @@ Recommended order:
 
 1. `writing-sidecar doctor <vault-or-project> --project <name>`
 2. `writing-sidecar session <vault-or-project> --project <name> --task startup`
-3. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`
-4. `writing-sidecar search ...` only if you need narrower follow-up evidence
-5. `writing-sidecar recap ...` only when you are recovering from a break, doing a handoff, or checking continuity risk
+3. `writing-sidecar verify <vault-or-project> --project <name> --scope chapter|handoff|timeline` before risky continuity-sensitive transitions
+4. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`
+5. `writing-sidecar search ...` only if you need narrower follow-up evidence
+6. `writing-sidecar recap ...` only when you are recovering from a break, doing a handoff, or checking continuity risk
 
 ## JSON output
 
@@ -73,6 +75,7 @@ If another tool or assistant layer needs machine-readable output, use `--format 
 - `recap`
 - `projects`
 - `doctor`
+- `verify`
 - `maintain`
 
 Visible helper output is available on:
@@ -80,3 +83,4 @@ Visible helper output is available on:
 - `session --out <path>`
 - `context --out <path>`
 - `recap --out <path>`
+- `verify --out <path>`
