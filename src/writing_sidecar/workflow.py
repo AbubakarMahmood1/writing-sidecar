@@ -52,6 +52,7 @@ MAINTAIN_KINDS = ("checkpoint", "audit", "handoff", "discarded", "closeout")
 VERIFY_SCOPES = ("startup", "chapter", "handoff", "timeline", "full")
 BUNDLE_NAMES = ("startup", "pre-prose", "audit-loop", "handoff", "closeout")
 BUNDLE_VERIFY_MODES = ("advisory", "strict", "skip")
+ROUTINE_NAMES = ("start-work", "move-to-prose", "repair-cycle", "session-end", "chapter-end")
 SESSION_TASKS = (
     "startup",
     "braindump",
@@ -1142,6 +1143,83 @@ def _last_checkpoint_at(project_root: Path) -> str | None:
     return datetime.fromtimestamp(latest, tz=timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _recommended_entrypoint() -> str:
+    return "writing-sidecar routine"
+
+
+def _recommended_routine(
+    *,
+    state: str,
+    stale: bool,
+    operative_phase: str | None,
+    status_text: str | None,
+    next_action: str | None,
+    continuity_state: str | None,
+    verification_stale: bool,
+) -> str:
+    combined = " ".join(
+        item
+        for item in (
+            operative_phase or "",
+            status_text or "",
+            next_action or "",
+            continuity_state or "",
+            state or "",
+        )
+        if item
+    ).lower()
+
+    def has_any(*tokens: str) -> bool:
+        return any(token in combined for token in tokens)
+
+    if operative_phase in {"AUDIT", "DEBUG"} or has_any(
+        "audit",
+        "debug",
+        "repair",
+        "revision",
+        "fix",
+        "dominant failure",
+        "cold audit",
+    ):
+        return "repair-cycle"
+
+    if has_any(
+        "handoff",
+        "next session",
+        "session end",
+        "wrap up",
+        "wrap-up",
+        "resume next time",
+        "pick up next session",
+    ):
+        return "session-end"
+
+    if operative_phase == "COMPLETE" or has_any(
+        "closeout",
+        "chapter closeout",
+        "chapter-end",
+        "chapter complete",
+        "archive the checkpoint",
+        "archive the audit",
+    ):
+        return "chapter-end"
+
+    if stale or state != "clean" or verification_stale or (continuity_state or "unknown") in {"unknown", "error"}:
+        return "start-work"
+
+    if operative_phase in {"BRAINDUMP", "SCRIPTING", "STAGING"} or has_any(
+        "move to prose",
+        "ready for prose",
+        "draft ready",
+        "before prose",
+        "start prose",
+        "draft the chapter",
+    ):
+        return "move-to-prose"
+
+    return "start-work"
+
+
 def list_writing_projects(vault_dir: str) -> dict:
     base_path = Path(vault_dir).expanduser().resolve()
     if base_path.is_file():
@@ -1155,8 +1233,19 @@ def list_writing_projects(vault_dir: str) -> dict:
         )
         doc_bundle = _load_live_doc_bundle(Path(status["project_root"]))
         operative_phase = _derive_operative_phase(doc_bundle, _extract_phase(doc_bundle))
+        current_status = _extract_field(doc_bundle, "status")
+        next_action = _extract_field(doc_bundle, "next_action")
         workflow_checks = _collect_workflow_checks(Path(status["project_root"]))
         verification = _cached_verification_summary(Path(status["output_root"]))
+        recommended_routine = _recommended_routine(
+            state=status["state"],
+            stale=status["stale"],
+            operative_phase=operative_phase,
+            status_text=current_status,
+            next_action=next_action,
+            continuity_state=verification["continuity_state"],
+            verification_stale=verification["verification_stale"],
+        )
         projects.append(
             {
                 "project": status["project"],
@@ -1167,8 +1256,10 @@ def list_writing_projects(vault_dir: str) -> dict:
                 "last_synced_at": status["last_synced_at"],
                 "last_checkpoint_at": _last_checkpoint_at(Path(status["project_root"])),
                 "operative_phase": operative_phase,
-                "next_action": _extract_field(doc_bundle, "next_action"),
+                "next_action": next_action,
                 "assistant_ready": _assistant_ready(workflow_checks),
+                "recommended_entrypoint": _recommended_entrypoint(),
+                "recommended_routine": recommended_routine,
                 "continuity_state": verification["continuity_state"],
                 "last_verified_at": verification["last_verified_at"],
                 "finding_counts": verification["finding_counts"],
@@ -1205,6 +1296,10 @@ def print_writing_projects(report: dict):
         if item.get("next_action"):
             print(f"    Next:   {item['next_action']}")
         print(f"    Ready:  {'YES' if item.get('assistant_ready') else 'NO'}")
+        if item.get("recommended_entrypoint"):
+            print(f"    Entry:  {item['recommended_entrypoint']}")
+        if item.get("recommended_routine"):
+            print(f"    Routine: {item['recommended_routine']}")
         continuity = (item.get("continuity_state") or "unknown").upper()
         if item.get("verification_stale") and continuity != "UNKNOWN":
             continuity = f"{continuity} (STALE)"
@@ -1947,6 +2042,143 @@ def _bundle_recap_mode(name: str) -> str | None:
     }.get(name)
 
 
+def _routine_bundle_name(name: str) -> str:
+    return {
+        "start-work": "startup",
+        "move-to-prose": "pre-prose",
+        "repair-cycle": "audit-loop",
+        "session-end": "handoff",
+        "chapter-end": "closeout",
+    }[name]
+
+
+def _routine_followup_task(name: str, operative_phase: str | None) -> str | None:
+    return {
+        "start-work": _session_task_for_phase(operative_phase),
+        "move-to-prose": "prose",
+        "repair-cycle": "debug",
+        "session-end": None,
+        "chapter-end": None,
+    }[name]
+
+
+def _routine_command(
+    vault_dir: str,
+    project: str | None,
+    name: str,
+    *,
+    write: bool = False,
+    verify_mode: str = "advisory",
+) -> str:
+    project_bits = f" --project {project}" if project else ""
+    command = f'writing-sidecar routine "{vault_dir}"{project_bits} --name {name} --verify {verify_mode}'
+    if write:
+        command += " --write"
+    return command
+
+
+def _bundle_verification_report_for_session(bundle_packet: dict) -> dict:
+    return {
+        "state": bundle_packet.get("continuity_state", "unknown"),
+        "finding_counts": dict(bundle_packet.get("finding_counts", {"error": 0, "warn": 0, "info": 0})),
+        "findings": list(bundle_packet.get("top_findings", [])),
+        "recommended_actions": list(bundle_packet.get("recommended_actions", [])),
+        "warnings": list(bundle_packet.get("warnings", [])),
+    }
+
+
+def _merge_section_maps(*section_maps: dict | None) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for section_map in section_maps:
+        if not section_map:
+            continue
+        for title, items in section_map.items():
+            existing = merged.setdefault(title, [])
+            for item in items:
+                if item not in existing:
+                    existing.append(item)
+    return merged
+
+
+def _routine_recommended_commands(
+    *,
+    vault_dir: str,
+    project: str | None,
+    name: str,
+    verify_mode: str,
+    write: bool,
+    bundle_packet: dict,
+    followup_packet: dict | None,
+) -> list[str]:
+    commands: list[str] = []
+    if not write:
+        commands.append(_routine_command(vault_dir, project, name, write=True, verify_mode=verify_mode))
+
+    if name == "start-work":
+        next_task = (followup_packet or {}).get("task") or _session_task_for_phase(bundle_packet.get("operative_phase"))
+        commands.append(_session_command(Path(bundle_packet["project_root"]), next_task, write=True))
+    elif name == "move-to-prose":
+        commands.append(_session_command(Path(bundle_packet["project_root"]), "prose", write=True))
+        commands.append(_routine_command(vault_dir, project, "repair-cycle", verify_mode=verify_mode))
+    elif name == "repair-cycle":
+        commands.append(_session_command(Path(bundle_packet["project_root"]), "debug", write=False))
+        if not write:
+            commands.append(_routine_command(vault_dir, project, "session-end", verify_mode=verify_mode))
+    elif name == "session-end":
+        commands.append(_routine_command(vault_dir, project, "start-work", verify_mode=verify_mode))
+    elif name == "chapter-end":
+        commands.append(_routine_command(vault_dir, project, "start-work", verify_mode=verify_mode))
+
+    for packet in (bundle_packet, followup_packet):
+        if not packet:
+            continue
+        for command in packet.get("recommended_commands", []):
+            if "writing-sidecar bundle" in command:
+                continue
+            if command not in commands:
+                commands.append(command)
+
+    return _unique_lines(commands)
+
+
+def _routine_recommended_actions(
+    *,
+    name: str,
+    bundle_packet: dict,
+    followup_packet: dict | None,
+    write: bool,
+) -> list[str]:
+    actions: list[str] = []
+    if name == "start-work":
+        actions.append("Use the startup bundle for re-entry, then move straight into the live phase packet instead of juggling commands manually.")
+        if not write:
+            actions.append("Persist the startup checkpoint once real work begins so the next session does not have to reconstruct context from scratch.")
+    elif name == "move-to-prose":
+        actions.append("Use this packet to decide whether prose should start now or whether structure/staging still needs one more pass.")
+        if not write:
+            actions.append("Write the pre-prose checkpoint only when the draft really is about to begin.")
+    elif name == "repair-cycle":
+        actions.append("Use the audit-loop bundle to identify the dominant failure, then use the debug packet to scope the repair instead of broad polish.")
+        if not write:
+            actions.append("Write the audit artifact only after the dominant failure is explicit.")
+    elif name == "session-end":
+        actions.append("Use the handoff packet to preserve the real restart position for the next session, not a vanity summary.")
+    elif name == "chapter-end":
+        actions.append("Use the closeout packet to archive the sidecar-safe carry-forward state before the next chapter cycle starts.")
+
+    for packet in (bundle_packet, followup_packet):
+        if not packet:
+            continue
+        for item in packet.get("recommended_actions", []):
+            lowered = item.lower()
+            if "writing-sidecar bundle" in lowered or "bundle packet" in lowered:
+                continue
+            if item not in actions:
+                actions.append(item)
+
+    return _unique_lines(actions)
+
+
 def _bundle_top_level_artifact_targets(name: str, primary_packet: dict) -> list[str]:
     if name == "audit-loop":
         return list(primary_packet.get("artifact_targets", []))
@@ -2381,6 +2613,235 @@ def render_writing_bundle(bundle_data: dict) -> str:
 
 def print_writing_bundle(bundle_data: dict):
     print(render_writing_bundle(bundle_data))
+
+
+def build_writing_routine(
+    vault_dir: str,
+    project: str | None = None,
+    out_dir: str = None,
+    codex_home: str = None,
+    config_path: str = None,
+    brainstorm_paths=None,
+    audit_paths=None,
+    discarded_paths=None,
+    palace_path: str = None,
+    runtime_root: str = None,
+    sync: str = "if-needed",
+    refresh_palace: bool = False,
+    name: str = "start-work",
+    verify_mode: str = "advisory",
+    notes: Sequence[str] | None = None,
+    write: bool = False,
+    n_results: int = 3,
+) -> dict:
+    if name not in ROUTINE_NAMES:
+        raise ValueError(f"Unknown writing routine: {name}")
+    if verify_mode not in BUNDLE_VERIFY_MODES:
+        raise ValueError(f"Unknown writing routine verify mode: {verify_mode}")
+
+    bundle_name = _routine_bundle_name(name)
+    bundle_packet = build_writing_bundle(
+        vault_dir=vault_dir,
+        project=project,
+        out_dir=out_dir,
+        codex_home=codex_home,
+        config_path=config_path,
+        brainstorm_paths=brainstorm_paths,
+        audit_paths=audit_paths,
+        discarded_paths=discarded_paths,
+        palace_path=palace_path,
+        runtime_root=runtime_root,
+        sync=sync,
+        refresh_palace=refresh_palace,
+        name=bundle_name,
+        verify_mode=verify_mode,
+        notes=notes,
+        write=write,
+        n_results=n_results,
+    )
+
+    followup_task = _routine_followup_task(name, bundle_packet.get("operative_phase"))
+    followup_packet = None
+    steps = list(bundle_packet.get("steps", []))
+
+    if followup_task:
+        followup_packet = build_writing_session(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            sync="never",
+            refresh_palace=False,
+            task=followup_task,
+            notes=notes,
+            write=False,
+            n_results=n_results,
+            run_verification=False,
+            verification_report=_bundle_verification_report_for_session(bundle_packet),
+        )
+        steps.append(
+            _bundle_step(
+                name=f"session-{followup_task}",
+                kind="session",
+                command=_session_command(Path(bundle_packet["project_root"]), followup_task, write=False),
+                status="completed",
+                write_capable=False,
+                write_requested=False,
+                summary=_session_step_summary(followup_packet),
+            )
+        )
+
+    effective_packet = followup_packet or bundle_packet
+    warnings = _unique_lines(
+        list(bundle_packet.get("warnings", []))
+        + list((followup_packet or {}).get("warnings", []))
+    )
+    doc_loadout = _unique_lines(
+        list((followup_packet or {}).get("doc_loadout", []))
+        + list(bundle_packet.get("doc_loadout", []))
+    )
+    file_targets = _unique_lines(
+        list((followup_packet or {}).get("file_targets", []))
+        + list(bundle_packet.get("file_targets", []))
+    )
+    artifact_targets = _unique_lines(
+        list(bundle_packet.get("artifact_targets", []))
+        + list((followup_packet or {}).get("artifact_targets", []))
+    )
+    recap_sections = _merge_section_maps(
+        bundle_packet.get("recap_sections", {}),
+        (followup_packet or {}).get("recap_sections", {}),
+    )
+
+    return {
+        "project": bundle_packet["project"],
+        "project_root": bundle_packet["project_root"],
+        "vault_root": bundle_packet["vault_root"],
+        "routine": name,
+        "verify_mode": verify_mode,
+        "state": bundle_packet["state"],
+        "stale": bundle_packet["stale"],
+        "reasons": list(bundle_packet.get("reasons", [])),
+        "last_synced_at": bundle_packet.get("last_synced_at"),
+        "operative_phase": effective_packet.get("operative_phase") or bundle_packet.get("operative_phase"),
+        "continuity_state": bundle_packet.get("continuity_state"),
+        "finding_counts": dict(bundle_packet.get("finding_counts", {"error": 0, "warn": 0, "info": 0})),
+        "top_findings": list(bundle_packet.get("top_findings", [])),
+        "doc_loadout": doc_loadout,
+        "file_targets": file_targets,
+        "artifact_targets": artifact_targets,
+        "recap_sections": recap_sections,
+        "steps": steps,
+        "recommended_actions": _routine_recommended_actions(
+            name=name,
+            bundle_packet=bundle_packet,
+            followup_packet=followup_packet,
+            write=write,
+        ),
+        "recommended_commands": _routine_recommended_commands(
+            vault_dir=vault_dir,
+            project=project,
+            name=name,
+            verify_mode=verify_mode,
+            write=write,
+            bundle_packet=bundle_packet,
+            followup_packet=followup_packet,
+        ),
+        "write_performed": bundle_packet.get("write_performed", False),
+        "paths_written": list(bundle_packet.get("paths_written", [])),
+        "sync_performed": bool(bundle_packet.get("sync_performed") or (followup_packet or {}).get("sync_performed")),
+        "warnings": warnings,
+    }
+
+
+def render_writing_routine(routine_data: dict) -> str:
+    lines = [
+        "",
+        "=" * 60,
+        f"  Writing Sidecar Routine ({routine_data['routine']})",
+        "=" * 60,
+        f"  Project:      {routine_data['project_root']}",
+        f"  State:        {routine_data['state'].upper()}",
+        f"  Verify mode:  {routine_data['verify_mode']}",
+    ]
+    if routine_data.get("operative_phase"):
+        lines.append(f"  Active phase: {routine_data['operative_phase']}")
+    if routine_data.get("last_synced_at"):
+        lines.append(f"  Synced:       {routine_data['last_synced_at']}")
+    lines.append(
+        "  Continuity:   "
+        f"{str(routine_data.get('continuity_state', 'unknown')).upper()} "
+        f"(errors={routine_data['finding_counts'].get('error', 0)} "
+        f"warns={routine_data['finding_counts'].get('warn', 0)} "
+        f"info={routine_data['finding_counts'].get('info', 0)})"
+    )
+
+    if routine_data.get("warnings"):
+        lines.append("\n  Warnings:")
+        for item in routine_data["warnings"]:
+            lines.append(f"    - {item}")
+
+    if routine_data.get("top_findings"):
+        lines.append("\n  Top findings:")
+        for item in routine_data["top_findings"]:
+            lines.append(f"    - [{item['severity'].upper()}] {item['title']}")
+
+    lines.append("\n  Steps:")
+    for step in routine_data.get("steps", []):
+        lines.append(f"    - {step['name']} [{step['status']}]")
+        lines.append(f"      {step['summary']}")
+        lines.append(f"      {step['command']}")
+
+    if routine_data.get("recommended_actions"):
+        lines.append("\n  Recommended actions:")
+        for item in routine_data["recommended_actions"]:
+            lines.append(f"    - {item}")
+
+    if routine_data.get("doc_loadout"):
+        lines.append("\n  Doc loadout:")
+        for item in routine_data["doc_loadout"]:
+            lines.append(f"    - {item}")
+
+    if routine_data.get("file_targets"):
+        lines.append("\n  File targets:")
+        for item in routine_data["file_targets"]:
+            lines.append(f"    - {item}")
+
+    if routine_data.get("artifact_targets"):
+        lines.append("\n  Artifact targets:")
+        for item in routine_data["artifact_targets"]:
+            lines.append(f"    - {item}")
+
+    for title, items in routine_data.get("recap_sections", {}).items():
+        lines.append(f"\n  {title}:")
+        if not items:
+            lines.append("    - none")
+            continue
+        for item in items:
+            lines.append(f"    - {item}")
+
+    if routine_data.get("recommended_commands"):
+        lines.append("\n  Recommended commands:")
+        for item in routine_data["recommended_commands"]:
+            lines.append(f"    - {item}")
+
+    if routine_data.get("paths_written"):
+        lines.append("\n  Paths written:")
+        for item in routine_data["paths_written"]:
+            lines.append(f"    - {item}")
+
+    lines.extend(["", "=" * 60, ""])
+    return "\n".join(lines)
+
+
+def print_writing_routine(routine_data: dict):
+    print(render_writing_routine(routine_data))
 
 
 def maintain_writing_sidecar(
@@ -6485,6 +6946,17 @@ def doctor_writing_sidecar(
     workflow_checks = _collect_workflow_checks(project_root)
     assistant_ready = _assistant_ready(workflow_checks)
     verification = _cached_verification_summary(Path(context["output_root"]))
+    doc_bundle = _load_live_doc_bundle(project_root)
+    operative_phase = _derive_operative_phase(doc_bundle, _extract_phase(doc_bundle))
+    recommended_routine = _recommended_routine(
+        state="clean",
+        stale=False,
+        operative_phase=operative_phase,
+        status_text=_extract_field(doc_bundle, "status"),
+        next_action=_extract_field(doc_bundle, "next_action"),
+        continuity_state=verification["continuity_state"],
+        verification_stale=verification["verification_stale"],
+    )
 
     if version is None:
         checks.append(
@@ -6570,6 +7042,8 @@ def doctor_writing_sidecar(
         "checks": checks,
         "workflow_checks": workflow_checks,
         "assistant_ready": assistant_ready,
+        "recommended_entrypoint": _recommended_entrypoint(),
+        "recommended_routine": recommended_routine,
         "continuity_state": verification["continuity_state"],
         "last_verified_at": verification["last_verified_at"],
         "finding_counts": verification["finding_counts"],
@@ -6619,6 +7093,10 @@ def print_doctor_report(report: dict):
             print(f"    {status:5} {label:20} {detail}")
 
     print(f"\n  Assistant ready: {'YES' if report.get('assistant_ready') else 'NO'}")
+    if report.get("recommended_entrypoint"):
+        print(f"  Entry point:     {report['recommended_entrypoint']}")
+    if report.get("recommended_routine"):
+        print(f"  Next routine:    {report['recommended_routine']}")
     continuity = (report.get("continuity_state") or "unknown").upper()
     if report.get("verification_stale") and continuity != "UNKNOWN":
         continuity = f"{continuity} (STALE)"

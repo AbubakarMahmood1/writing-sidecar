@@ -12,6 +12,7 @@ from .workflow import (
     CONTEXT_MODES,
     MAINTAIN_KINDS,
     RECAP_MODES,
+    ROUTINE_NAMES,
     SEARCH_MODE_ROOMS,
     SESSION_TASKS,
     VERIFY_SCOPES,
@@ -21,6 +22,7 @@ from .workflow import (
     build_writing_context,
     build_writing_recap,
     build_writing_bundle,
+    build_writing_routine,
     build_writing_session,
     doctor_writing_sidecar,
     export_writing_corpus,
@@ -35,6 +37,7 @@ from .workflow import (
     print_writing_maintenance,
     print_writing_projects,
     print_writing_recap,
+    print_writing_routine,
     print_writing_search_results,
     print_writing_session,
     print_writing_status,
@@ -42,6 +45,7 @@ from .workflow import (
     render_writing_context,
     render_writing_bundle,
     render_writing_recap,
+    render_writing_routine,
     render_writing_session,
     render_writing_verify,
     scaffold_writing_sidecar,
@@ -527,6 +531,38 @@ def cmd_bundle(args):
         raise SystemExit(1)
 
 
+def cmd_routine(args):
+    report = build_writing_routine(
+        vault_dir=args.dir,
+        project=args.project,
+        out_dir=args.sidecar_out,
+        codex_home=args.codex_home,
+        config_path=args.config,
+        brainstorm_paths=args.brainstorms,
+        audit_paths=args.audits,
+        discarded_paths=args.discarded_paths,
+        palace_path=args.sidecar_palace,
+        runtime_root=args.runtime_root,
+        sync=args.sync,
+        refresh_palace=args.refresh_palace,
+        name=args.name,
+        verify_mode=args.verify,
+        notes=args.note,
+        write=args.write,
+        n_results=args.results,
+    )
+    if args.format == "json":
+        rendered = json.dumps(report, indent=2)
+        print(rendered)
+    else:
+        rendered = render_writing_routine(report)
+        print(rendered)
+    if args.out:
+        _write_rendered_output(args.out, rendered)
+    if args.verify == "strict" and report.get("continuity_state") == "error":
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="writing-sidecar — standalone CDLC sidecar for MemPalace-backed process memory.",
@@ -776,6 +812,43 @@ def build_parser() -> argparse.ArgumentParser:
     p_bundle.add_argument("--out", default=None, help="Optional output path for the rendered bundle packet")
     _add_format_arg(p_bundle)
 
+    p_routine = sub.add_parser("routine", help="Run a visible assistant workflow routine")
+    _shared_project_args(p_routine, include_sidecar_out=False)
+    p_routine.add_argument(
+        "--sidecar-out",
+        default=None,
+        help="Optional sidecar output directory override (default: <vault>/.sidecars/<project>)",
+    )
+    p_routine.add_argument(
+        "--name",
+        choices=ROUTINE_NAMES,
+        default="start-work",
+        help="Routine to run (default: start-work)",
+    )
+    p_routine.add_argument(
+        "--sync",
+        choices=["always", "if-needed", "never"],
+        default="if-needed",
+        help="When to rebuild the sidecar before routine work (default: if-needed)",
+    )
+    p_routine.add_argument(
+        "--verify",
+        choices=BUNDLE_VERIFY_MODES,
+        default="advisory",
+        help="How the routine should handle verification (default: advisory)",
+    )
+    p_routine.add_argument("--refresh-palace", action="store_true", help="Rebuild the target palace before mining")
+    p_routine.add_argument("--write", action="store_true", help="Actually write the routine's sidecar-safe artifact(s)")
+    p_routine.add_argument(
+        "--note",
+        action="append",
+        default=[],
+        help="Additional assistant/human note to merge into routine-backed writes; repeat as needed",
+    )
+    p_routine.add_argument("--results", type=int, default=3, help="Number of hits per routine query")
+    p_routine.add_argument("--out", default=None, help="Optional output path for the rendered routine packet")
+    _add_format_arg(p_routine)
+
     return parser
 
 
@@ -800,6 +873,7 @@ def main(argv=None):
         "maintain": cmd_maintain,
         "session": cmd_session,
         "bundle": cmd_bundle,
+        "routine": cmd_routine,
     }
 
     try:
