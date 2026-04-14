@@ -110,10 +110,20 @@ If something looks worth taking:
 3. validate `writing-sidecar` against it
 4. merge only if it clearly improves the sidecar stack
 
-Baseline on `2026-04-15`:
+Baseline on `2026-04-15` after `git fetch upstream`:
 
-- `origin/main...upstream/main` in `mempalace-fork`: `0 0`
-- current fork main is aligned with upstream main
+- `origin/main...upstream/main` in `mempalace-fork`: `0 ahead / 179 behind`
+- `origin/main` is out of date relative to upstream
+- upstream `HEAD` currently points at `develop`, not `main`
+
+Recent upstream-only changes include:
+
+- `refactor: route all chromadb access through ChromaBackend`
+- `fix: save hook auto-mines transcript without MEMPAL_DIR`
+- `release: v3.3.0`
+- several install, docs, CI, and packaging fixes
+
+Do not sync this blindly. Review the gap for sidecar-relevant engine fixes first, then intake only what helps.
 
 ## Exit Criteria
 
