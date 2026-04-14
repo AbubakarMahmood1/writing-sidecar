@@ -50,6 +50,8 @@ CONTEXT_MODES = ("startup", "planning", "audit", "history", "research")
 RECAP_MODES = ("restart", "handoff", "continuity")
 MAINTAIN_KINDS = ("checkpoint", "audit", "handoff", "discarded", "closeout")
 VERIFY_SCOPES = ("startup", "chapter", "handoff", "timeline", "full")
+BUNDLE_NAMES = ("startup", "pre-prose", "audit-loop", "handoff", "closeout")
+BUNDLE_VERIFY_MODES = ("advisory", "strict", "skip")
 SESSION_TASKS = (
     "startup",
     "braindump",
@@ -71,6 +73,13 @@ SESSION_VERIFY_SCOPES = {
     "prose": "chapter",
     "audit": "chapter",
     "debug": "chapter",
+    "handoff": "handoff",
+    "closeout": "handoff",
+}
+BUNDLE_VERIFY_SCOPES = {
+    "startup": "startup",
+    "pre-prose": "chapter",
+    "audit-loop": "chapter",
     "handoff": "handoff",
     "closeout": "handoff",
 }
@@ -1526,6 +1535,8 @@ def build_writing_session(
     notes: Sequence[str] | None = None,
     write: bool = False,
     n_results: int = 3,
+    run_verification: bool = True,
+    verification_report: dict | None = None,
 ) -> dict:
     if task not in SESSION_TASKS:
         raise ValueError(f"Unknown writing session task: {task}")
@@ -1598,13 +1609,18 @@ def build_writing_session(
     if task not in {"handoff", "closeout"}:
         base.setdefault("recap_sections", recap_sections)
     verification_scope = _verification_scope_for_task(task)
-    verification = _build_verification_report(
-        prepared,
-        scope=verification_scope,
-        n_results=n_results,
-        doc_bundle=doc_bundle,
-        write_cache=False,
-    )
+    if verification_report is not None:
+        verification = verification_report
+    elif run_verification:
+        verification = _build_verification_report(
+            prepared,
+            scope=verification_scope,
+            n_results=n_results,
+            doc_bundle=doc_bundle,
+            write_cache=False,
+        )
+    else:
+        verification = _empty_verification_report(prepared, verification_scope)
 
     write_reports = []
     if write:
@@ -1818,6 +1834,553 @@ def render_writing_session(session_data: dict) -> str:
 
 def print_writing_session(session_data: dict):
     print(render_writing_session(session_data))
+
+
+def _bundle_cli_target(vault_dir: str, project: str | None) -> str:
+    target = f'"{Path(vault_dir).expanduser().resolve()}"'
+    if project:
+        return f"{target} --project {project}"
+    return target
+
+
+def _bundle_command(vault_dir: str, project: str | None, name: str, *, write: bool = False, verify_mode: str = "advisory") -> str:
+    command = f"writing-sidecar bundle {_bundle_cli_target(vault_dir, project)} --name {name}"
+    if verify_mode != "advisory":
+        command += f" --verify {verify_mode}"
+    if write:
+        command += " --write"
+    return command
+
+
+def _verify_command(vault_dir: str, project: str | None, scope: str) -> str:
+    return f"writing-sidecar verify {_bundle_cli_target(vault_dir, project)} --scope {scope}"
+
+
+def _recap_command(vault_dir: str, project: str | None, mode: str) -> str:
+    return f"writing-sidecar recap {_bundle_cli_target(vault_dir, project)} --mode {mode}"
+
+
+def _bundle_step(
+    *,
+    name: str,
+    kind: str,
+    command: str,
+    status: str,
+    write_capable: bool,
+    write_requested: bool,
+    summary: str,
+) -> dict:
+    return {
+        "name": name,
+        "kind": kind,
+        "command": command,
+        "status": status,
+        "write_capable": write_capable,
+        "write_requested": write_requested,
+        "summary": summary,
+    }
+
+
+def _verification_step_summary(report: dict) -> str:
+    counts = report.get("finding_counts", {})
+    return (
+        f'{report.get("scope", "unknown")} verification -> {str(report.get("state", "unknown")).upper()} '
+        f'(errors={counts.get("error", 0)} warns={counts.get("warn", 0)} info={counts.get("info", 0)})'
+    )
+
+
+def _session_step_summary(report: dict) -> str:
+    task = report.get("task", report.get("mode", "session"))
+    operative_phase = report.get("operative_phase") or report.get("phase") or "UNKNOWN"
+    target_count = len(report.get("file_targets", []))
+    return f"{task} packet -> {operative_phase} with {target_count} file target(s)"
+
+
+def _recap_step_summary(report: dict) -> str:
+    return f'{report.get("mode", "recap")} recap -> {len(report.get("sections", {}))} section(s)'
+
+
+def _write_step_summary(report: dict, fallback: str) -> str:
+    path_count = len(report.get("paths_written", []))
+    if path_count:
+        return f"wrote {path_count} sidecar-safe path(s)"
+    if report.get("write_performed"):
+        return "write flow completed"
+    return fallback
+
+
+def _verification_stub_for_bundle(prepared: dict, scope: str) -> dict:
+    return _empty_verification_report(prepared, scope)
+
+
+def _bundle_write_task(name: str) -> str | None:
+    return {
+        "startup": "startup",
+        "pre-prose": "prose",
+        "audit-loop": "audit",
+        "handoff": "handoff",
+        "closeout": "closeout",
+    }.get(name)
+
+
+def _bundle_main_task(name: str) -> str:
+    return {
+        "startup": "startup",
+        "pre-prose": "prose",
+        "audit-loop": "audit",
+        "handoff": "handoff",
+        "closeout": "closeout",
+    }[name]
+
+
+def _bundle_secondary_task(name: str) -> str | None:
+    return {
+        "audit-loop": "debug",
+    }.get(name)
+
+
+def _bundle_recap_mode(name: str) -> str | None:
+    return {
+        "startup": "restart",
+        "handoff": "handoff",
+        "closeout": "handoff",
+    }.get(name)
+
+
+def _bundle_top_level_artifact_targets(name: str, primary_packet: dict) -> list[str]:
+    if name == "audit-loop":
+        return list(primary_packet.get("artifact_targets", []))
+    return list(primary_packet.get("artifact_targets", []))
+
+
+def _bundle_recap_sections(name: str, recap_packet: dict | None, primary_packet: dict, secondary_packet: dict | None) -> dict[str, list[str]]:
+    if recap_packet:
+        return dict(recap_packet.get("sections", {}))
+    if primary_packet.get("recap_sections"):
+        return dict(primary_packet.get("recap_sections", {}))
+    if secondary_packet and secondary_packet.get("recap_sections"):
+        return dict(secondary_packet.get("recap_sections", {}))
+    return {}
+
+
+def _bundle_recommended_commands(
+    *,
+    vault_dir: str,
+    project: str | None,
+    name: str,
+    verify_mode: str,
+    write: bool,
+    primary_packet: dict,
+    secondary_packet: dict | None,
+) -> list[str]:
+    commands: list[str] = []
+    write_task = _bundle_write_task(name)
+    write_command = None
+    if write_task is not None:
+        write_command = _session_command(Path(primary_packet["project_root"]), write_task, write=True)
+    if not write and write_task is not None:
+        commands.append(_bundle_command(vault_dir, project, name, write=True, verify_mode=verify_mode))
+    for packet in (primary_packet, secondary_packet):
+        if not packet:
+            continue
+        for item in packet.get("recommended_commands", []):
+            if write_command and item == write_command:
+                continue
+            commands.append(item)
+    return _unique_lines(commands)
+
+
+def _bundle_recommended_actions(
+    *,
+    verify_report: dict | None,
+    primary_packet: dict,
+    secondary_packet: dict | None,
+    write_command: str | None,
+    bundle_write_command: str | None,
+) -> list[str]:
+    actions: list[str] = []
+    if verify_report:
+        actions.extend(verify_report.get("recommended_actions", []))
+    if bundle_write_command:
+        actions.append(f"Run `{bundle_write_command}` when you want this transition persisted.")
+    for packet in (primary_packet, secondary_packet):
+        if not packet:
+            continue
+        for item in packet.get("recommended_actions", []):
+            if write_command and write_command in item:
+                continue
+            actions.append(item)
+    return _unique_lines(actions)
+
+
+def build_writing_bundle(
+    vault_dir: str,
+    project: str | None = None,
+    out_dir: str = None,
+    codex_home: str = None,
+    config_path: str = None,
+    brainstorm_paths=None,
+    audit_paths=None,
+    discarded_paths=None,
+    palace_path: str = None,
+    runtime_root: str = None,
+    sync: str = "if-needed",
+    refresh_palace: bool = False,
+    name: str = "startup",
+    verify_mode: str = "advisory",
+    notes: Sequence[str] | None = None,
+    write: bool = False,
+    n_results: int = 3,
+) -> dict:
+    if name not in BUNDLE_NAMES:
+        raise ValueError(f"Unknown writing bundle: {name}")
+    if verify_mode not in BUNDLE_VERIFY_MODES:
+        raise ValueError(f"Unknown writing bundle verify mode: {verify_mode}")
+
+    scope = BUNDLE_VERIFY_SCOPES[name]
+    main_task = _bundle_main_task(name)
+    secondary_task = _bundle_secondary_task(name)
+    recap_mode = _bundle_recap_mode(name)
+    cleaned_notes = _clean_note_list(notes or [])
+    steps: list[dict] = []
+    initial_sync = sync
+    verification_report: dict | None = None
+
+    if verify_mode != "skip":
+        verification_report = verify_writing_sidecar(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            sync=sync,
+            refresh_palace=refresh_palace,
+            scope=scope,
+            n_results=n_results,
+        )
+        steps.append(
+            _bundle_step(
+                name=f"verify-{scope}",
+                kind="verify",
+                command=_verify_command(vault_dir, project, scope),
+                status="completed",
+                write_capable=False,
+                write_requested=False,
+                summary=_verification_step_summary(verification_report),
+            )
+        )
+        initial_sync = "never"
+
+    primary_packet = build_writing_session(
+        vault_dir=vault_dir,
+        project=project,
+        out_dir=out_dir,
+        codex_home=codex_home,
+        config_path=config_path,
+        brainstorm_paths=brainstorm_paths,
+        audit_paths=audit_paths,
+        discarded_paths=discarded_paths,
+        palace_path=palace_path,
+        runtime_root=runtime_root,
+        sync=initial_sync,
+        refresh_palace=refresh_palace if verify_mode == "skip" else False,
+        task=main_task,
+        notes=cleaned_notes,
+        write=False,
+        n_results=n_results,
+        run_verification=False,
+        verification_report=verification_report,
+    )
+    prepared_stub = {"status": {"project": primary_packet["project"], "project_root": primary_packet["project_root"], "vault_root": primary_packet["vault_root"], "output_root": default_output_dir(Path(primary_packet["vault_root"]), primary_packet["project"]), "last_synced_at": primary_packet.get("last_synced_at")}, "sync_summary": primary_packet.get("sync_summary"), "synced": primary_packet.get("synced", False)}
+    if verification_report is None:
+        verification_report = _verification_stub_for_bundle(prepared_stub, scope)
+        steps.append(
+            _bundle_step(
+                name=f"verify-{scope}",
+                kind="verify",
+                command=_verify_command(vault_dir, project, scope),
+                status="skipped",
+                write_capable=False,
+                write_requested=False,
+                summary=f"{scope} verification skipped by request",
+            )
+        )
+    steps.append(
+        _bundle_step(
+            name=f"session-{main_task}",
+            kind="session",
+            command=_session_command(Path(primary_packet["project_root"]), main_task, write=False),
+            status="completed",
+            write_capable=False,
+            write_requested=False,
+            summary=_session_step_summary(primary_packet),
+        )
+    )
+
+    recap_packet = None
+    if recap_mode:
+        recap_packet = build_writing_recap(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            sync="never",
+            refresh_palace=False,
+            mode=recap_mode,
+            n_results=n_results,
+        )
+        steps.append(
+            _bundle_step(
+                name=f"recap-{recap_mode}",
+                kind="recap",
+                command=_recap_command(vault_dir, project, recap_mode),
+                status="completed",
+                write_capable=False,
+                write_requested=False,
+                summary=_recap_step_summary(recap_packet),
+            )
+        )
+
+    secondary_packet = None
+    if secondary_task:
+        secondary_packet = build_writing_session(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            sync="never",
+            refresh_palace=False,
+            task=secondary_task,
+            notes=cleaned_notes,
+            write=False,
+            n_results=n_results,
+            run_verification=False,
+            verification_report=verification_report,
+        )
+        steps.append(
+            _bundle_step(
+                name=f"session-{secondary_task}",
+                kind="session",
+                command=_session_command(Path(primary_packet["project_root"]), secondary_task, write=False),
+                status="completed",
+                write_capable=False,
+                write_requested=False,
+                summary=_session_step_summary(secondary_packet),
+            )
+        )
+
+    write_task = _bundle_write_task(name)
+    write_packet = None
+    write_command = _session_command(Path(primary_packet["project_root"]), write_task, write=True) if write_task else None
+    if write and write_task:
+        write_packet = build_writing_session(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            sync=sync,
+            refresh_palace=False,
+            task=write_task,
+            notes=cleaned_notes,
+            write=True,
+            n_results=n_results,
+            run_verification=False,
+            verification_report=verification_report,
+        )
+        steps.append(
+            _bundle_step(
+                name=f"write-{name}",
+                kind="write",
+                command=write_command,
+                status="completed",
+                write_capable=True,
+                write_requested=True,
+                summary=_write_step_summary(write_packet, "write flow completed"),
+            )
+        )
+    elif write_task:
+        steps.append(
+            _bundle_step(
+                name=f"write-{name}",
+                kind="write",
+                command=write_command,
+                status="skipped",
+                write_capable=True,
+                write_requested=False,
+                summary="Preview only; rerun with --write to persist the bundle's sidecar-safe artifact(s).",
+            )
+        )
+
+    effective_primary = write_packet or primary_packet
+    bundle_write_command = _bundle_command(vault_dir, project, name, write=True, verify_mode=verify_mode) if write_task and not write else None
+    doc_loadout = _unique_lines(
+        list(effective_primary.get("doc_loadout", []))
+        + list((secondary_packet or {}).get("doc_loadout", []))
+    )
+    file_targets = _unique_lines(
+        list(effective_primary.get("file_targets", []))
+        + list((secondary_packet or {}).get("file_targets", []))
+    )
+    warnings = _unique_lines(
+        list(verification_report.get("warnings", []))
+        + list(effective_primary.get("warnings", []))
+        + list((recap_packet or {}).get("warnings", []))
+        + list((secondary_packet or {}).get("warnings", []))
+    )
+
+    return {
+        "project": effective_primary["project"],
+        "project_root": effective_primary["project_root"],
+        "vault_root": effective_primary["vault_root"],
+        "bundle": name,
+        "verify_mode": verify_mode,
+        "state": effective_primary["state"],
+        "stale": effective_primary["stale"],
+        "reasons": effective_primary.get("reasons", []),
+        "last_synced_at": effective_primary.get("last_synced_at"),
+        "operative_phase": effective_primary.get("operative_phase"),
+        "continuity_state": verification_report.get("state", "unknown"),
+        "finding_counts": verification_report.get("finding_counts", {"error": 0, "warn": 0, "info": 0}),
+        "top_findings": verification_report.get("findings", [])[:3],
+        "doc_loadout": doc_loadout,
+        "file_targets": file_targets,
+        "artifact_targets": _bundle_top_level_artifact_targets(name, effective_primary),
+        "recap_sections": _bundle_recap_sections(name, recap_packet, effective_primary, secondary_packet),
+        "steps": steps,
+        "recommended_actions": _bundle_recommended_actions(
+            verify_report=verification_report if verify_mode != "skip" else None,
+            primary_packet=effective_primary,
+            secondary_packet=secondary_packet,
+            write_command=write_command,
+            bundle_write_command=bundle_write_command,
+        ),
+        "recommended_commands": _bundle_recommended_commands(
+            vault_dir=vault_dir,
+            project=project,
+            name=name,
+            verify_mode=verify_mode,
+            write=write,
+            primary_packet=effective_primary,
+            secondary_packet=secondary_packet,
+        ),
+        "write_performed": bool(write_packet and write_packet.get("write_performed")),
+        "paths_written": list(write_packet.get("paths_written", [])) if write_packet else [],
+        "sync_performed": bool(
+            verification_report.get("synced")
+            or effective_primary.get("sync_performed")
+            or effective_primary.get("synced")
+            or (recap_packet or {}).get("synced")
+            or (secondary_packet or {}).get("sync_performed")
+        ),
+        "warnings": warnings,
+    }
+
+
+def render_writing_bundle(bundle_data: dict) -> str:
+    lines = [
+        "",
+        "=" * 60,
+        f"  Writing Sidecar Bundle ({bundle_data['bundle']})",
+        "=" * 60,
+        f"  Project:      {bundle_data['project_root']}",
+        f"  State:        {bundle_data['state'].upper()}",
+        f"  Verify mode:  {bundle_data['verify_mode']}",
+    ]
+    if bundle_data.get("operative_phase"):
+        lines.append(f"  Active phase: {bundle_data['operative_phase']}")
+    if bundle_data.get("last_synced_at"):
+        lines.append(f"  Synced:       {bundle_data['last_synced_at']}")
+    lines.append(
+        "  Continuity:   "
+        f"{str(bundle_data.get('continuity_state', 'unknown')).upper()} "
+        f"(errors={bundle_data['finding_counts'].get('error', 0)} "
+        f"warns={bundle_data['finding_counts'].get('warn', 0)} "
+        f"info={bundle_data['finding_counts'].get('info', 0)})"
+    )
+
+    if bundle_data.get("warnings"):
+        lines.append("\n  Warnings:")
+        for item in bundle_data["warnings"]:
+            lines.append(f"    - {item}")
+
+    if bundle_data.get("top_findings"):
+        lines.append("\n  Top findings:")
+        for item in bundle_data["top_findings"]:
+            lines.append(f"    - [{item['severity'].upper()}] {item['title']}")
+
+    lines.append("\n  Steps:")
+    for step in bundle_data.get("steps", []):
+        lines.append(f"    - {step['name']} [{step['status']}]")
+        lines.append(f"      {step['summary']}")
+        lines.append(f"      {step['command']}")
+
+    if bundle_data.get("recommended_actions"):
+        lines.append("\n  Recommended actions:")
+        for item in bundle_data["recommended_actions"]:
+            lines.append(f"    - {item}")
+
+    if bundle_data.get("doc_loadout"):
+        lines.append("\n  Doc loadout:")
+        for item in bundle_data["doc_loadout"]:
+            lines.append(f"    - {item}")
+
+    if bundle_data.get("file_targets"):
+        lines.append("\n  File targets:")
+        for item in bundle_data["file_targets"]:
+            lines.append(f"    - {item}")
+
+    if bundle_data.get("artifact_targets"):
+        lines.append("\n  Artifact targets:")
+        for item in bundle_data["artifact_targets"]:
+            lines.append(f"    - {item}")
+
+    for title, items in bundle_data.get("recap_sections", {}).items():
+        lines.append(f"\n  {title}:")
+        if not items:
+            lines.append("    - none")
+            continue
+        for item in items:
+            lines.append(f"    - {item}")
+
+    if bundle_data.get("recommended_commands"):
+        lines.append("\n  Recommended commands:")
+        for item in bundle_data["recommended_commands"]:
+            lines.append(f"    - {item}")
+
+    if bundle_data.get("paths_written"):
+        lines.append("\n  Paths written:")
+        for item in bundle_data["paths_written"]:
+            lines.append(f"    - {item}")
+
+    lines.extend(["", "=" * 60, ""])
+    return "\n".join(lines)
+
+
+def print_writing_bundle(bundle_data: dict):
+    print(render_writing_bundle(bundle_data))
 
 
 def maintain_writing_sidecar(
@@ -4100,6 +4663,28 @@ def _finding_counts(findings: Sequence[dict]) -> dict:
 
 def _verification_scope_for_task(task: str) -> str:
     return SESSION_VERIFY_SCOPES[task]
+
+
+def _empty_verification_report(prepared: dict, scope: str) -> dict:
+    status = prepared["status"]
+    return {
+        "project": status["project"],
+        "project_root": status["project_root"],
+        "vault_root": status["vault_root"],
+        "scope": scope,
+        "state": "unknown",
+        "verified_at": None,
+        "last_synced_at": status.get("last_synced_at"),
+        "finding_counts": {"error": 0, "warn": 0, "info": 0},
+        "findings": [],
+        "warnings": [],
+        "recommended_actions": [],
+        "query_packets": [],
+        "source_snapshot": [],
+        "cache_path": str(_verification_cache_path(Path(status["output_root"]))),
+        "sync_summary": prepared.get("sync_summary"),
+        "synced": prepared.get("synced", False),
+    }
 
 
 def _build_verify_source_bundle(project_root: Path, doc_bundle: dict) -> dict:

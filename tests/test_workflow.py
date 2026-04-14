@@ -12,6 +12,7 @@ from chromadb.api.client import SharedSystemClient
 from writing_sidecar.mempalace_adapter import SUPPORTED_MEMPALACE_SPEC
 from writing_sidecar.workflow import (
     STATE_FILENAME,
+    build_writing_bundle,
     build_writing_context,
     build_writing_recap,
     build_writing_session,
@@ -1927,6 +1928,234 @@ def test_build_writing_session_debug_only_writes_discarded_when_note_or_evidence
     assert calls == [("audit", "never"), ("discarded", "if-needed")]
 
 
+def test_build_writing_bundle_startup_preview_write_and_skip(monkeypatch):
+    verify_calls = []
+    recap_calls = []
+    session_calls = []
+
+    def fake_verify(**kwargs):
+        verify_calls.append(kwargs)
+        return {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "scope": kwargs["scope"],
+            "state": "warn",
+            "verified_at": "2026-04-10T00:00:00+00:00",
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "finding_counts": {"error": 0, "warn": 1, "info": 0},
+            "findings": [{"severity": "warn", "title": "Checkpoint missing"}],
+            "warnings": ["Checkpoint missing"],
+            "recommended_actions": ["Create a checkpoint before continuing."],
+            "query_packets": [],
+            "source_snapshot": [],
+            "cache_path": "C:/vault/.sidecars/witcher_dc/.writing-sidecar-verify.json",
+            "sync_summary": None,
+            "synced": False,
+        }
+
+    def fake_recap(**kwargs):
+        recap_calls.append(kwargs)
+        return {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "mode": kwargs["mode"],
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "sections": {"Where We Are": ["Ready to re-enter Atlantis."]},
+            "warnings": [],
+            "synced": False,
+            "sync_summary": None,
+        }
+
+    def fake_session(**kwargs):
+        session_calls.append(kwargs)
+        task = kwargs["task"]
+        write = kwargs["write"]
+        return {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "task": task,
+            "phase": "COMPLETE",
+            "operative_phase": "SCRIPTING",
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "doc_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "file_targets": ["C:/vault/Witcher-DC/_story_bible/05_Current_Chapter_Notes.md"],
+            "artifact_targets": [f"C:/vault/Witcher-DC/logs/checkpoints/{task}.md"],
+            "recommended_actions": [
+                f"Run `writing-sidecar session \"C:/vault/Witcher-DC\" --task {task} --write` when ready."
+            ],
+            "recommended_commands": [
+                f"writing-sidecar session \"C:/vault/Witcher-DC\" --task {task} --write"
+            ],
+            "write_performed": write,
+            "paths_written": [f"C:/vault/Witcher-DC/logs/checkpoints/{task}.md"] if write else [],
+            "sync_performed": write and kwargs["sync"] != "never",
+            "warnings": [],
+            "queries_run": [],
+            "results": [],
+            "recap_sections": {},
+            "verification_scope": "startup",
+            "continuity_state": kwargs["verification_report"]["state"] if kwargs["verification_report"] else "unknown",
+            "finding_counts": (
+                kwargs["verification_report"]["finding_counts"]
+                if kwargs["verification_report"]
+                else {"error": 0, "warn": 0, "info": 0}
+            ),
+            "top_findings": kwargs["verification_report"]["findings"][:1] if kwargs["verification_report"] else [],
+            "recommended_repairs": [],
+            "synced": False,
+            "sync_summary": None,
+        }
+
+    monkeypatch.setattr("writing_sidecar.workflow.verify_writing_sidecar", fake_verify)
+    monkeypatch.setattr("writing_sidecar.workflow.build_writing_recap", fake_recap)
+    monkeypatch.setattr("writing_sidecar.workflow.build_writing_session", fake_session)
+
+    preview_report = build_writing_bundle("C:/vault", project="Witcher-DC", name="startup")
+    assert preview_report["bundle"] == "startup"
+    assert preview_report["continuity_state"] == "warn"
+    assert [step["name"] for step in preview_report["steps"]] == [
+        "verify-startup",
+        "session-startup",
+        "recap-restart",
+        "write-startup",
+    ]
+    assert preview_report["steps"][-1]["status"] == "skipped"
+    assert preview_report["recommended_commands"][0].startswith("writing-sidecar bundle ")
+    assert '--project Witcher-DC --name startup --write' in preview_report["recommended_commands"][0]
+    assert session_calls[0]["run_verification"] is False
+    assert session_calls[0]["verification_report"]["state"] == "warn"
+
+    verify_calls.clear()
+    recap_calls.clear()
+    session_calls.clear()
+    skipped_report = build_writing_bundle(
+        "C:/vault",
+        project="Witcher-DC",
+        name="startup",
+        verify_mode="skip",
+    )
+    assert skipped_report["continuity_state"] == "unknown"
+    assert skipped_report["steps"][0]["name"] == "verify-startup"
+    assert skipped_report["steps"][0]["status"] == "skipped"
+    assert verify_calls == []
+    assert session_calls[0]["run_verification"] is False
+    assert session_calls[0]["verification_report"] is None
+
+    verify_calls.clear()
+    recap_calls.clear()
+    session_calls.clear()
+    write_report = build_writing_bundle(
+        "C:/vault",
+        project="Witcher-DC",
+        name="startup",
+        write=True,
+    )
+    assert write_report["write_performed"] is True
+    assert write_report["paths_written"] == ["C:/vault/Witcher-DC/logs/checkpoints/startup.md"]
+    assert [call["task"] for call in session_calls] == ["startup", "startup"]
+    assert [call["write"] for call in session_calls] == [False, True]
+    assert session_calls[1]["sync"] == "if-needed"
+
+
+def test_build_writing_bundle_audit_loop_writes_only_audit(monkeypatch):
+    verify_calls = []
+    session_calls = []
+
+    def fake_verify(**kwargs):
+        verify_calls.append(kwargs)
+        return {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "scope": kwargs["scope"],
+            "state": "clean",
+            "verified_at": "2026-04-10T00:00:00+00:00",
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "finding_counts": {"error": 0, "warn": 0, "info": 0},
+            "findings": [],
+            "warnings": [],
+            "recommended_actions": [],
+            "query_packets": [],
+            "source_snapshot": [],
+            "cache_path": "C:/vault/.sidecars/witcher_dc/.writing-sidecar-verify.json",
+            "sync_summary": None,
+            "synced": False,
+        }
+
+    def fake_session(**kwargs):
+        session_calls.append((kwargs["task"], kwargs["write"], kwargs["sync"]))
+        task = kwargs["task"]
+        write = kwargs["write"]
+        artifact = f"C:/vault/Witcher-DC/logs/{'audits' if task == 'audit' else 'checkpoints'}/{task}.md"
+        return {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "task": task,
+            "phase": "AUDIT",
+            "operative_phase": "DEBUG" if task == "debug" else "AUDIT",
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "doc_loadout": [f"{task}.md"],
+            "file_targets": [f"C:/vault/Witcher-DC/{task}.md"],
+            "artifact_targets": [artifact],
+            "recommended_actions": [f"{task}-action"],
+            "recommended_commands": [f"{task}-command"],
+            "write_performed": write,
+            "paths_written": [artifact] if write else [],
+            "sync_performed": write and kwargs["sync"] != "never",
+            "warnings": [],
+            "queries_run": [],
+            "results": [],
+            "recap_sections": {},
+            "verification_scope": "chapter",
+            "continuity_state": "clean",
+            "finding_counts": {"error": 0, "warn": 0, "info": 0},
+            "top_findings": [],
+            "recommended_repairs": [],
+            "synced": False,
+            "sync_summary": None,
+        }
+
+    monkeypatch.setattr("writing_sidecar.workflow.verify_writing_sidecar", fake_verify)
+    monkeypatch.setattr("writing_sidecar.workflow.build_writing_session", fake_session)
+
+    report = build_writing_bundle(
+        "C:/vault",
+        project="Witcher-DC",
+        name="audit-loop",
+        write=True,
+        notes=["Balanced braid rejected."],
+    )
+
+    assert verify_calls[0]["scope"] == "chapter"
+    assert [step["name"] for step in report["steps"]] == [
+        "verify-chapter",
+        "session-audit",
+        "session-debug",
+        "write-audit-loop",
+    ]
+    assert session_calls == [
+        ("audit", False, "never"),
+        ("debug", False, "never"),
+        ("audit", True, "if-needed"),
+    ]
+    assert report["paths_written"] == ["C:/vault/Witcher-DC/logs/audits/audit.md"]
+    assert report["write_performed"] is True
+    assert report["artifact_targets"] == ["C:/vault/Witcher-DC/logs/audits/audit.md"]
+
+
 def test_cli_json_output_for_status_context_projects_doctor_session_and_verify(monkeypatch, capsys):
     import writing_sidecar.cli as cli
 
@@ -2065,6 +2294,42 @@ def test_cli_json_output_for_status_context_projects_doctor_session_and_verify(m
             "top_findings": [],
             "recommended_repairs": [],
         }
+        bundle_payload = {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "bundle": "startup",
+            "verify_mode": "advisory",
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "operative_phase": "SCRIPTING",
+            "continuity_state": "warn",
+            "finding_counts": {"error": 0, "warn": 1, "info": 0},
+            "top_findings": [],
+            "doc_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "file_targets": ["C:/vault/Witcher-DC/_story_bible/05_Current_Chapter_Notes.md"],
+            "artifact_targets": ["C:/vault/Witcher-DC/logs/checkpoints/2026-04-10_startup_checkpoint.md"],
+            "recap_sections": {"Where We Are": ["ready"]},
+            "steps": [
+                {
+                    "name": "verify-startup",
+                    "kind": "verify",
+                    "command": "writing-sidecar verify C:/vault --project Witcher-DC --scope startup",
+                    "status": "completed",
+                    "write_capable": False,
+                    "write_requested": False,
+                    "summary": "Continuity is WARN",
+                }
+            ],
+            "recommended_actions": ["Open the current chapter notes."],
+            "recommended_commands": ["writing-sidecar bundle C:/vault --project Witcher-DC --name startup --write"],
+            "write_performed": False,
+            "paths_written": [],
+            "sync_performed": False,
+            "warnings": [],
+        }
 
         monkeypatch.setattr(cli, "get_writing_sidecar_status", lambda **kwargs: status_payload)
         monkeypatch.setattr(cli, "build_writing_context", lambda **kwargs: context_payload)
@@ -2072,6 +2337,7 @@ def test_cli_json_output_for_status_context_projects_doctor_session_and_verify(m
         monkeypatch.setattr(cli, "list_writing_projects", lambda *args, **kwargs: projects_payload)
         monkeypatch.setattr(cli, "verify_writing_sidecar", lambda **kwargs: verify_payload)
         monkeypatch.setattr(cli, "build_writing_session", lambda **kwargs: session_payload)
+        monkeypatch.setattr(cli, "build_writing_bundle", lambda **kwargs: bundle_payload)
 
         for argv, key in (
             (["writing-sidecar", "status", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "state"),
@@ -2080,6 +2346,7 @@ def test_cli_json_output_for_status_context_projects_doctor_session_and_verify(m
             (["writing-sidecar", "projects", str(tmp_path), "--format", "json"], "count"),
             (["writing-sidecar", "verify", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "scope"),
             (["writing-sidecar", "session", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "task"),
+            (["writing-sidecar", "bundle", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "bundle"),
         ):
             monkeypatch.setattr(sys, "argv", argv)
             cli.main(sys.argv[1:])
@@ -2089,7 +2356,7 @@ def test_cli_json_output_for_status_context_projects_doctor_session_and_verify(m
         cleanup_temp_dir(tmp_path)
 
 
-def test_cli_context_recap_session_and_verify_support_out_files(monkeypatch):
+def test_cli_context_recap_session_verify_and_bundle_support_out_files(monkeypatch):
     import writing_sidecar.cli as cli
 
     tmp_path = make_temp_dir()
@@ -2098,6 +2365,7 @@ def test_cli_context_recap_session_and_verify_support_out_files(monkeypatch):
         recap_out = tmp_path / "recap.txt"
         session_out = tmp_path / "session.txt"
         verify_out = tmp_path / "verify.txt"
+        bundle_out = tmp_path / "bundle.txt"
 
         context_payload = {
             "project": "Witcher-DC",
@@ -2192,25 +2460,55 @@ def test_cli_context_recap_session_and_verify_support_out_files(monkeypatch):
             "sync_summary": None,
             "synced": False,
         }
+        bundle_payload = {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "bundle": "startup",
+            "verify_mode": "advisory",
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "operative_phase": "SCRIPTING",
+            "continuity_state": "clean",
+            "finding_counts": {"error": 0, "warn": 0, "info": 0},
+            "top_findings": [],
+            "doc_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "file_targets": ["C:/vault/Witcher-DC/_story_bible/05_Current_Chapter_Notes.md"],
+            "artifact_targets": ["target"],
+            "recap_sections": {"Where We Are": ["ready"]},
+            "steps": [],
+            "recommended_actions": ["action"],
+            "recommended_commands": ["command"],
+            "write_performed": False,
+            "paths_written": [],
+            "sync_performed": False,
+            "warnings": [],
+        }
 
         monkeypatch.setattr(cli, "build_writing_context", lambda **kwargs: context_payload)
         monkeypatch.setattr(cli, "build_writing_recap", lambda **kwargs: recap_payload)
         monkeypatch.setattr(cli, "build_writing_session", lambda **kwargs: session_payload)
         monkeypatch.setattr(cli, "verify_writing_sidecar", lambda **kwargs: verify_payload)
+        monkeypatch.setattr(cli, "build_writing_bundle", lambda **kwargs: bundle_payload)
         monkeypatch.setattr(cli, "render_writing_context", lambda payload: "context-rendered")
         monkeypatch.setattr(cli, "render_writing_recap", lambda payload: "recap-rendered")
         monkeypatch.setattr(cli, "render_writing_session", lambda payload: "session-rendered")
         monkeypatch.setattr(cli, "render_writing_verify", lambda payload: "verify-rendered")
+        monkeypatch.setattr(cli, "render_writing_bundle", lambda payload: "bundle-rendered")
 
         cli.main(["context", str(tmp_path), "--project", "Witcher-DC", "--out", str(context_out)])
         cli.main(["recap", str(tmp_path), "--project", "Witcher-DC", "--out", str(recap_out)])
         cli.main(["verify", str(tmp_path), "--project", "Witcher-DC", "--out", str(verify_out)])
         cli.main(["session", str(tmp_path), "--project", "Witcher-DC", "--out", str(session_out)])
+        cli.main(["bundle", str(tmp_path), "--project", "Witcher-DC", "--out", str(bundle_out)])
 
         assert context_out.read_text(encoding="utf-8") == "context-rendered"
         assert recap_out.read_text(encoding="utf-8") == "recap-rendered"
         assert verify_out.read_text(encoding="utf-8") == "verify-rendered"
         assert session_out.read_text(encoding="utf-8") == "session-rendered"
+        assert bundle_out.read_text(encoding="utf-8") == "bundle-rendered"
     finally:
         cleanup_temp_dir(tmp_path)
 
@@ -2248,6 +2546,51 @@ def test_cli_verify_strict_exits_only_on_errors(monkeypatch):
 
         monkeypatch.setattr(cli, "verify_writing_sidecar", lambda **kwargs: clean_payload)
         cli.main(["verify", str(tmp_path), "--project", "Witcher-DC", "--strict"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_cli_bundle_strict_exits_only_on_errors(monkeypatch):
+    import writing_sidecar.cli as cli
+
+    tmp_path = make_temp_dir()
+    try:
+        error_payload = {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "bundle": "startup",
+            "verify_mode": "strict",
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "operative_phase": "SCRIPTING",
+            "continuity_state": "error",
+            "finding_counts": {"error": 1, "warn": 0, "info": 0},
+            "top_findings": [],
+            "doc_loadout": [],
+            "file_targets": [],
+            "artifact_targets": [],
+            "recap_sections": {},
+            "steps": [],
+            "recommended_actions": [],
+            "recommended_commands": [],
+            "write_performed": False,
+            "paths_written": [],
+            "sync_performed": False,
+            "warnings": [],
+        }
+        clean_payload = dict(error_payload)
+        clean_payload["continuity_state"] = "clean"
+        clean_payload["finding_counts"] = {"error": 0, "warn": 0, "info": 0}
+
+        monkeypatch.setattr(cli, "build_writing_bundle", lambda **kwargs: error_payload)
+        with pytest.raises(SystemExit):
+            cli.main(["bundle", str(tmp_path), "--project", "Witcher-DC", "--verify", "strict"])
+
+        monkeypatch.setattr(cli, "build_writing_bundle", lambda **kwargs: clean_payload)
+        cli.main(["bundle", str(tmp_path), "--project", "Witcher-DC", "--verify", "strict"])
     finally:
         cleanup_temp_dir(tmp_path)
 

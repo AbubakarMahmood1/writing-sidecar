@@ -39,8 +39,11 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 
 ## Practical AI behavior
 
-- start with `writing-sidecar session --task startup` when entering a sidecar-enabled project
-- once real work begins, prefer `writing-sidecar session --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`
+- start with `writing-sidecar bundle --name startup` when entering a sidecar-enabled project
+- use `writing-sidecar bundle --name pre-prose` before moving into prose
+- use `writing-sidecar bundle --name audit-loop` when audit/debug work starts
+- use `writing-sidecar bundle --name handoff|closeout --write` at real transitions
+- use `writing-sidecar session --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write` for phase-local work
 - keep `planning` only as a compatibility umbrella when you want a broad pre-prose packet
 - use `writing-sidecar status` when you only need raw health / staleness
 - if stale and the task needs process memory, run `writing-sidecar sync`
@@ -52,18 +55,19 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 - use `writing-sidecar recap --mode handoff` before handing work to another assistant or another session
 - use `writing-sidecar recap --mode continuity` when the main risk is drift, obligations, or timeline confusion
 - use `writing-sidecar verify --scope chapter|handoff|timeline` before continuity-sensitive transitions
-- use lower-level `maintain` only when you need narrower control than `session --task ... --write`
+- use lower-level `session`, `verify`, `recap`, `search`, or `maintain` only when you need narrower control than the bundle flow
 
 ## Startup-first flow
 
 Recommended order:
 
 1. `writing-sidecar doctor <vault-or-project> --project <name>`
-2. `writing-sidecar session <vault-or-project> --project <name> --task startup`
-3. `writing-sidecar verify <vault-or-project> --project <name> --scope chapter|handoff|timeline` before risky continuity-sensitive transitions
-4. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`
-5. `writing-sidecar search ...` only if you need narrower follow-up evidence
-6. `writing-sidecar recap ...` only when you are recovering from a break, doing a handoff, or checking continuity risk
+2. `writing-sidecar bundle <vault-or-project> --project <name> --name startup`
+3. `writing-sidecar bundle <vault-or-project> --project <name> --name pre-prose` before prose starts
+4. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose --write` for phase-local work
+5. `writing-sidecar bundle <vault-or-project> --project <name> --name audit-loop`
+6. `writing-sidecar bundle <vault-or-project> --project <name> --name handoff|closeout --write`
+7. use `search`, `verify`, `recap`, or `maintain` only when you need narrower control
 
 ## JSON output
 
@@ -77,6 +81,7 @@ If another tool or assistant layer needs machine-readable output, use `--format 
 - `doctor`
 - `verify`
 - `maintain`
+- `bundle`
 
 Visible helper output is available on:
 
@@ -84,3 +89,4 @@ Visible helper output is available on:
 - `context --out <path>`
 - `recap --out <path>`
 - `verify --out <path>`
+- `bundle --out <path>`

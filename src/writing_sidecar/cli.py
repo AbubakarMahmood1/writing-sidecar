@@ -7,6 +7,8 @@ from pathlib import Path
 
 from .mempalace_adapter import MempalaceCompatibilityError, search as raw_search
 from .workflow import (
+    BUNDLE_NAMES,
+    BUNDLE_VERIFY_MODES,
     CONTEXT_MODES,
     MAINTAIN_KINDS,
     RECAP_MODES,
@@ -18,6 +20,7 @@ from .workflow import (
     _sidecar_runtime_environment,
     build_writing_context,
     build_writing_recap,
+    build_writing_bundle,
     build_writing_session,
     doctor_writing_sidecar,
     export_writing_corpus,
@@ -28,6 +31,7 @@ from .workflow import (
     print_export_summary,
     print_scaffold_summary,
     print_writing_context,
+    print_writing_bundle,
     print_writing_maintenance,
     print_writing_projects,
     print_writing_recap,
@@ -36,6 +40,7 @@ from .workflow import (
     print_writing_status,
     print_writing_verify,
     render_writing_context,
+    render_writing_bundle,
     render_writing_recap,
     render_writing_session,
     render_writing_verify,
@@ -490,6 +495,38 @@ def cmd_session(args):
         _write_rendered_output(args.out, rendered)
 
 
+def cmd_bundle(args):
+    report = build_writing_bundle(
+        vault_dir=args.dir,
+        project=args.project,
+        out_dir=args.sidecar_out,
+        codex_home=args.codex_home,
+        config_path=args.config,
+        brainstorm_paths=args.brainstorms,
+        audit_paths=args.audits,
+        discarded_paths=args.discarded_paths,
+        palace_path=args.sidecar_palace,
+        runtime_root=args.runtime_root,
+        sync=args.sync,
+        refresh_palace=args.refresh_palace,
+        name=args.name,
+        verify_mode=args.verify,
+        notes=args.note,
+        write=args.write,
+        n_results=args.results,
+    )
+    if args.format == "json":
+        rendered = json.dumps(report, indent=2)
+        print(rendered)
+    else:
+        rendered = render_writing_bundle(report)
+        print(rendered)
+    if args.out:
+        _write_rendered_output(args.out, rendered)
+    if args.verify == "strict" and report.get("continuity_state") == "error":
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="writing-sidecar — standalone CDLC sidecar for MemPalace-backed process memory.",
@@ -702,6 +739,43 @@ def build_parser() -> argparse.ArgumentParser:
     p_session.add_argument("--out", default=None, help="Optional output path for the rendered session packet")
     _add_format_arg(p_session)
 
+    p_bundle = sub.add_parser("bundle", help="Run a transition-level assistant workflow bundle")
+    _shared_project_args(p_bundle, include_sidecar_out=False)
+    p_bundle.add_argument(
+        "--sidecar-out",
+        default=None,
+        help="Optional sidecar output directory override (default: <vault>/.sidecars/<project>)",
+    )
+    p_bundle.add_argument(
+        "--name",
+        choices=BUNDLE_NAMES,
+        default="startup",
+        help="Bundle to run (default: startup)",
+    )
+    p_bundle.add_argument(
+        "--sync",
+        choices=["always", "if-needed", "never"],
+        default="if-needed",
+        help="When to rebuild the sidecar before bundle work (default: if-needed)",
+    )
+    p_bundle.add_argument(
+        "--verify",
+        choices=BUNDLE_VERIFY_MODES,
+        default="advisory",
+        help="How the bundle should handle verification (default: advisory)",
+    )
+    p_bundle.add_argument("--refresh-palace", action="store_true", help="Rebuild the target palace before mining")
+    p_bundle.add_argument("--write", action="store_true", help="Actually write the bundle's sidecar-safe artifact(s)")
+    p_bundle.add_argument(
+        "--note",
+        action="append",
+        default=[],
+        help="Additional assistant/human note to merge into bundle-backed writes; repeat as needed",
+    )
+    p_bundle.add_argument("--results", type=int, default=3, help="Number of hits per bundle query")
+    p_bundle.add_argument("--out", default=None, help="Optional output path for the rendered bundle packet")
+    _add_format_arg(p_bundle)
+
     return parser
 
 
@@ -725,6 +799,7 @@ def main(argv=None):
         "verify": cmd_verify,
         "maintain": cmd_maintain,
         "session": cmd_session,
+        "bundle": cmd_bundle,
     }
 
     try:

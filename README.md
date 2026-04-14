@@ -41,6 +41,7 @@ Windows note:
 writing-sidecar init <vault-or-project> --project Witcher-DC
 writing-sidecar status <vault-or-project> --project Witcher-DC
 writing-sidecar export <vault-or-project> --project Witcher-DC
+writing-sidecar bundle <vault-or-project> --project Witcher-DC --name startup
 writing-sidecar session <vault-or-project> --project Witcher-DC --task startup
 writing-sidecar context <vault-or-project> --project Witcher-DC
 writing-sidecar search <vault-or-project> --project Witcher-DC --query "Arthur sponsorship"
@@ -61,6 +62,7 @@ Structured output is available on:
 - `projects --format json`
 - `doctor --format json`
 - `verify --format json`
+- `bundle --format json`
 
 ## What It Does
 
@@ -68,6 +70,7 @@ Structured output is available on:
 - tracks state in `.writing-sidecar-state.json`
 - rebuilds only when inputs actually changed
 - searches by intent instead of dumping all rooms together
+- packages transition moments with deterministic `bundle` runbooks
 - runs a phase-aware assistant workflow with `session`
 - builds a compact startup packet for assistants with `context`
 - generates deterministic restart / handoff / continuity recaps with `recap`
@@ -116,38 +119,40 @@ Once this package becomes your normal entrypoint, treat `mempalace-fork` as a co
 
 ## Recommended Codex Flow
 
-For normal project startup:
+Use `bundle` for transitions and `session` for phase-local work.
 
-1. `writing-sidecar doctor <vault-or-project> --project <name>`
-2. `writing-sidecar session <vault-or-project> --project <name> --task startup`
-3. `writing-sidecar verify <vault-or-project> --project <name> --scope chapter|handoff|timeline` before continuity-sensitive transitions
-4. `writing-sidecar search ...` only when you need a tighter follow-up query
-5. do the normal writing task
+1. `writing-sidecar doctor <vault-or-project> --project <name>` only when setup confidence is low
+2. `writing-sidecar bundle <vault-or-project> --project <name> --name startup`
+3. `writing-sidecar bundle <vault-or-project> --project <name> --name pre-prose` before prose starts
+4. `writing-sidecar bundle <vault-or-project> --project <name> --name audit-loop` during audit/debug work
+5. `writing-sidecar bundle <vault-or-project> --project <name> --name handoff|closeout --write` at real transitions
+6. use `session`, `verify`, `recap`, `search`, or `maintain` only when you need narrower control
 
 Examples:
 
 ```bash
-writing-sidecar session C:/vault --project Witcher-DC --task startup
-writing-sidecar session C:/vault --project Witcher-DC --task planning --write
-writing-sidecar verify C:/vault --project Witcher-DC --scope chapter
-writing-sidecar context C:/vault --project Witcher-DC --mode startup
-writing-sidecar recap C:/vault --project Witcher-DC --mode restart
-writing-sidecar maintain C:/vault --project Witcher-DC --kind checkpoint --write
+writing-sidecar bundle C:/vault --project Witcher-DC --name startup
+writing-sidecar bundle C:/vault --project Witcher-DC --name pre-prose
+writing-sidecar bundle C:/vault --project Witcher-DC --name audit-loop
+writing-sidecar bundle C:/vault --project Witcher-DC --name handoff --write
+writing-sidecar session C:/vault --project Witcher-DC --task scripting --write
+writing-sidecar verify C:/vault --project Witcher-DC --scope timeline
 writing-sidecar projects C:/vault --format json
 ```
 
 Recommended Codex operating loop:
 
-1. `writing-sidecar session <vault-or-project> --project <name> --task startup`
-2. `writing-sidecar verify <vault-or-project> --project <name> --scope chapter|handoff|timeline` before risky continuity-sensitive transitions
-3. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose|audit|debug|handoff|closeout --write`
-4. treat `planning` as a compatibility umbrella, not the preferred long-term phase task
-5. use `search`, `context`, `recap`, or `maintain` only when you need narrower control
-6. keep live story-bible docs as canon and treat sidecar output as process memory only
+1. `writing-sidecar bundle <vault-or-project> --project <name> --name startup`
+2. `writing-sidecar bundle <vault-or-project> --project <name> --name pre-prose` before prose starts
+3. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose --write` for phase-local work
+4. `writing-sidecar bundle <vault-or-project> --project <name> --name audit-loop` when review/fix work starts
+5. `writing-sidecar bundle <vault-or-project> --project <name> --name handoff|closeout --write` at transitions
+6. treat `planning` as a compatibility umbrella, not the preferred long-term phase task
+7. keep live story-bible docs as canon and treat sidecar output as process memory only
 
 ## JSON contract
 
-When you use `--format json`, v6 keeps these top-level keys stable where they apply:
+When you use `--format json`, v7 keeps these top-level keys stable where they apply:
 
 - `project`
 - `project_root`
@@ -167,6 +172,7 @@ Command-specific payload keys remain stable too:
 - `doctor`: `checks`, `workflow_checks`, `assistant_ready`, `ok`, `supported_spec`, `mempalace_version`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`
 - `verify`: `scope`, `state`, `verified_at`, `finding_counts`, `findings`, `recommended_actions`, `query_packets`, `source_snapshot`, `cache_path`
 - `maintain`: `kind`, `mode`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `source_inputs`, `generated_sections`
+- `bundle`: `bundle`, `verify_mode`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `recap_sections`, `steps`, `recommended_actions`, `recommended_commands`, `write_performed`, `paths_written`, `sync_performed`, `warnings`
 
 Visible helper output is also supported on:
 
@@ -174,6 +180,7 @@ Visible helper output is also supported on:
 - `context --out <path>`
 - `recap --out <path>`
 - `verify --out <path>`
+- `bundle --out <path>`
 
 ## Maintenance Rule
 
