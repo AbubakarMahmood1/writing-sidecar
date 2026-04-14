@@ -122,6 +122,7 @@ Once this package becomes your normal entrypoint, treat `mempalace-fork` as a co
 
 - [Migration from `mempalace writing-*`](./MIGRATION.md)
 - [Palace Writing Guide](./PALACE_WRITING_GUIDE.md)
+- [Post-V10 Stabilization](./POST_V10_STABILIZATION.md)
 
 ## Recommended Codex Flow
 
