@@ -7,6 +7,8 @@ from pathlib import Path
 
 from .mempalace_adapter import MempalaceCompatibilityError, search as raw_search
 from .workflow import (
+    AUTOMATE_NAMES,
+    AUTOMATE_TARGETS,
     BUNDLE_NAMES,
     BUNDLE_VERIFY_MODES,
     CONTEXT_MODES,
@@ -22,6 +24,7 @@ from .workflow import (
     build_writing_context,
     build_writing_recap,
     build_writing_bundle,
+    build_writing_automation,
     build_writing_routine,
     build_writing_session,
     doctor_writing_sidecar,
@@ -34,6 +37,7 @@ from .workflow import (
     print_scaffold_summary,
     print_writing_context,
     print_writing_bundle,
+    print_writing_automation,
     print_writing_maintenance,
     print_writing_projects,
     print_writing_recap,
@@ -44,6 +48,7 @@ from .workflow import (
     print_writing_verify,
     render_writing_context,
     render_writing_bundle,
+    render_writing_automation,
     render_writing_recap,
     render_writing_routine,
     render_writing_session,
@@ -563,6 +568,37 @@ def cmd_routine(args):
         raise SystemExit(1)
 
 
+def cmd_automate(args):
+    report = build_writing_automation(
+        vault_dir=args.dir,
+        project=args.project,
+        out_dir=args.sidecar_out,
+        codex_home=args.codex_home,
+        config_path=args.config,
+        brainstorm_paths=args.brainstorms,
+        audit_paths=args.audits,
+        discarded_paths=args.discarded_paths,
+        palace_path=args.sidecar_palace,
+        runtime_root=args.runtime_root,
+        sync=args.sync,
+        refresh_palace=args.refresh_palace,
+        name=args.name,
+        target=args.target,
+        verify_mode=args.verify,
+        n_results=args.results,
+    )
+    if args.format == "json":
+        rendered = json.dumps(report, indent=2)
+        print(rendered)
+    else:
+        rendered = render_writing_automation(report)
+        print(rendered)
+    if args.out:
+        _write_rendered_output(args.out, rendered)
+    if args.verify == "strict" and report.get("continuity_state") == "error":
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="writing-sidecar — standalone CDLC sidecar for MemPalace-backed process memory.",
@@ -849,6 +885,42 @@ def build_parser() -> argparse.ArgumentParser:
     p_routine.add_argument("--out", default=None, help="Optional output path for the rendered routine packet")
     _add_format_arg(p_routine)
 
+    p_automate = sub.add_parser("automate", help="Build a Codex-ready one-shot helper packet")
+    _shared_project_args(p_automate, include_sidecar_out=False)
+    p_automate.add_argument(
+        "--sidecar-out",
+        default=None,
+        help="Optional sidecar output directory override (default: <vault>/.sidecars/<project>)",
+    )
+    p_automate.add_argument(
+        "--name",
+        choices=AUTOMATE_NAMES,
+        default="recommended",
+        help="Automation helper to emit (default: recommended)",
+    )
+    p_automate.add_argument(
+        "--target",
+        choices=AUTOMATE_TARGETS,
+        default="codex",
+        help="Helper target (default: codex)",
+    )
+    p_automate.add_argument(
+        "--sync",
+        choices=["always", "if-needed", "never"],
+        default="if-needed",
+        help="When to rebuild the sidecar before helper generation (default: if-needed)",
+    )
+    p_automate.add_argument(
+        "--verify",
+        choices=BUNDLE_VERIFY_MODES,
+        default="advisory",
+        help="How helper generation should handle verification (default: advisory)",
+    )
+    p_automate.add_argument("--refresh-palace", action="store_true", help="Rebuild the target palace before mining")
+    p_automate.add_argument("--results", type=int, default=3, help="Number of hits per helper query")
+    p_automate.add_argument("--out", default=None, help="Optional output path for the rendered helper packet")
+    _add_format_arg(p_automate)
+
     return parser
 
 
@@ -874,6 +946,7 @@ def main(argv=None):
         "session": cmd_session,
         "bundle": cmd_bundle,
         "routine": cmd_routine,
+        "automate": cmd_automate,
     }
 
     try:

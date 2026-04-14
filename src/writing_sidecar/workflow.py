@@ -53,6 +53,8 @@ VERIFY_SCOPES = ("startup", "chapter", "handoff", "timeline", "full")
 BUNDLE_NAMES = ("startup", "pre-prose", "audit-loop", "handoff", "closeout")
 BUNDLE_VERIFY_MODES = ("advisory", "strict", "skip")
 ROUTINE_NAMES = ("start-work", "move-to-prose", "repair-cycle", "session-end", "chapter-end")
+AUTOMATE_NAMES = ("recommended",) + ROUTINE_NAMES
+AUTOMATE_TARGETS = ("codex",)
 SESSION_TASKS = (
     "startup",
     "braindump",
@@ -1144,7 +1146,85 @@ def _last_checkpoint_at(project_root: Path) -> str | None:
 
 
 def _recommended_entrypoint() -> str:
-    return "writing-sidecar routine"
+    return "writing-sidecar automate"
+
+
+def _should_resolve_explicit_automate(
+    *,
+    state: str,
+    stale: bool,
+    assistant_ready: bool,
+    continuity_state: str | None,
+    verification_stale: bool,
+) -> bool:
+    if not assistant_ready:
+        return False
+    if stale or verification_stale or state != "clean":
+        return False
+    return (continuity_state or "unknown") not in {"unknown", "error"}
+
+
+def _automation_command(
+    vault_dir: str,
+    project: str | None,
+    name: str,
+    *,
+    target: str = "codex",
+    verify_mode: str = "advisory",
+    sync: str = "if-needed",
+) -> str:
+    project_bits = f" --project {project}" if project else ""
+    command = f'writing-sidecar automate "{vault_dir}"{project_bits} --name {name}'
+    if target != "codex":
+        command += f" --target {target}"
+    if verify_mode != "advisory":
+        command += f" --verify {verify_mode}"
+    if sync != "if-needed":
+        command += f" --sync {sync}"
+    return command
+
+
+def _workflow_recommendations(
+    *,
+    project_root: str,
+    state: str,
+    stale: bool,
+    operative_phase: str | None,
+    status_text: str | None,
+    next_action: str | None,
+    continuity_state: str | None,
+    verification_stale: bool,
+    assistant_ready: bool,
+) -> dict:
+    recommended_routine = _recommended_routine(
+        state=state,
+        stale=stale,
+        operative_phase=operative_phase,
+        status_text=status_text,
+        next_action=next_action,
+        continuity_state=continuity_state,
+        verification_stale=verification_stale,
+    )
+    automate_name = (
+        recommended_routine
+        if _should_resolve_explicit_automate(
+            state=state,
+            stale=stale,
+            assistant_ready=assistant_ready,
+            continuity_state=continuity_state,
+            verification_stale=verification_stale,
+        )
+        else "recommended"
+    )
+    return {
+        "recommended_entrypoint": _recommended_entrypoint(),
+        "recommended_routine": recommended_routine,
+        "recommended_automate_command": _automation_command(
+            project_root,
+            None,
+            automate_name,
+        ),
+    }
 
 
 def _recommended_routine(
@@ -1237,7 +1317,8 @@ def list_writing_projects(vault_dir: str) -> dict:
         next_action = _extract_field(doc_bundle, "next_action")
         workflow_checks = _collect_workflow_checks(Path(status["project_root"]))
         verification = _cached_verification_summary(Path(status["output_root"]))
-        recommended_routine = _recommended_routine(
+        recommendations = _workflow_recommendations(
+            project_root=status["project_root"],
             state=status["state"],
             stale=status["stale"],
             operative_phase=operative_phase,
@@ -1245,6 +1326,7 @@ def list_writing_projects(vault_dir: str) -> dict:
             next_action=next_action,
             continuity_state=verification["continuity_state"],
             verification_stale=verification["verification_stale"],
+            assistant_ready=_assistant_ready(workflow_checks),
         )
         projects.append(
             {
@@ -1258,8 +1340,9 @@ def list_writing_projects(vault_dir: str) -> dict:
                 "operative_phase": operative_phase,
                 "next_action": next_action,
                 "assistant_ready": _assistant_ready(workflow_checks),
-                "recommended_entrypoint": _recommended_entrypoint(),
-                "recommended_routine": recommended_routine,
+                "recommended_entrypoint": recommendations["recommended_entrypoint"],
+                "recommended_routine": recommendations["recommended_routine"],
+                "recommended_automate_command": recommendations["recommended_automate_command"],
                 "continuity_state": verification["continuity_state"],
                 "last_verified_at": verification["last_verified_at"],
                 "finding_counts": verification["finding_counts"],
@@ -1298,6 +1381,8 @@ def print_writing_projects(report: dict):
         print(f"    Ready:  {'YES' if item.get('assistant_ready') else 'NO'}")
         if item.get("recommended_entrypoint"):
             print(f"    Entry:  {item['recommended_entrypoint']}")
+        if item.get("recommended_automate_command"):
+            print(f"    Automate: {item['recommended_automate_command']}")
         if item.get("recommended_routine"):
             print(f"    Routine: {item['recommended_routine']}")
         continuity = (item.get("continuity_state") or "unknown").upper()
@@ -2069,9 +2154,12 @@ def _routine_command(
     *,
     write: bool = False,
     verify_mode: str = "advisory",
+    sync: str = "if-needed",
 ) -> str:
     project_bits = f" --project {project}" if project else ""
     command = f'writing-sidecar routine "{vault_dir}"{project_bits} --name {name} --verify {verify_mode}'
+    if sync != "if-needed":
+        command += f" --sync {sync}"
     if write:
         command += " --write"
     return command
@@ -2842,6 +2930,335 @@ def render_writing_routine(routine_data: dict) -> str:
 
 def print_writing_routine(routine_data: dict):
     print(render_writing_routine(routine_data))
+
+
+def _automate_default_write(name: str) -> bool:
+    return name in {"session-end", "chapter-end"}
+
+
+def _automation_entry_command(
+    *,
+    project_root: str,
+    routine: str,
+    verify_mode: str,
+    sync: str,
+) -> str:
+    return _routine_command(
+        project_root,
+        None,
+        routine,
+        write=_automate_default_write(routine),
+        verify_mode=verify_mode,
+        sync=sync,
+    )
+
+
+def _automation_write_variant_command(
+    *,
+    project_root: str,
+    routine: str,
+    verify_mode: str,
+    sync: str,
+) -> str | None:
+    if _automate_default_write(routine):
+        return None
+    return _routine_command(
+        project_root,
+        None,
+        routine,
+        write=True,
+        verify_mode=verify_mode,
+        sync=sync,
+    )
+
+
+def _automation_expected_outputs(routine: str) -> list[str]:
+    outputs = {
+        "start-work": [
+            "A clean re-entry packet with the exact files to open first.",
+            "The next phase-local session command once startup is complete.",
+            "A separate checkpoint write command if you want to persist the restart state.",
+        ],
+        "move-to-prose": [
+            "A prose-readiness packet with blockers, continuity watch items, and draft start conditions.",
+            "The exact prose-facing files to open next.",
+            "A separate checkpoint write command if you want to persist the pre-prose state.",
+        ],
+        "repair-cycle": [
+            "An audit/debug helper packet that names the dominant failure and likely repair direction.",
+            "The exact audit-safe artifact target when you choose to persist the repair loop.",
+            "The debug-facing follow-up commands without silently writing cut-path artifacts.",
+        ],
+        "session-end": [
+            "A handoff packet that preserves the next-session restart position.",
+            "The exact write command for the handoff artifact.",
+            "The unresolved risks and carry-forward items the next session should see immediately.",
+        ],
+        "chapter-end": [
+            "A closeout packet that shows whether chapter closeout is safe.",
+            "The exact composite closeout write command.",
+            "The carry-forward items that still need to surface in live docs before the next chapter cycle.",
+        ],
+    }
+    return list(outputs[routine])
+
+
+def _automation_prompt(
+    *,
+    routine: str,
+    entry_command: str,
+    write_variant_command: str | None,
+    routine_packet: dict,
+) -> str:
+    file_targets = list(routine_packet.get("file_targets", []))
+    doc_loadout = list(routine_packet.get("doc_loadout", []))
+    top_findings = list(routine_packet.get("top_findings", []))
+    recommended_commands = list(routine_packet.get("recommended_commands", []))
+    next_phase_command = next(
+        (item for item in recommended_commands if "writing-sidecar session" in item),
+        None,
+    )
+
+    lines = [
+        f"You are resuming this writing project through the `{routine}` helper packet.",
+        "Live docs outrank sidecar and checkpoint evidence whenever they disagree.",
+        "Do not mutate canon or current-doc files, and do not perform silent writes.",
+        f"Use this exact command first: `{entry_command}`",
+    ]
+    if write_variant_command:
+        lines.append(f"If you later want the sidecar-safe persisted version, use: `{write_variant_command}`")
+
+    if routine == "start-work":
+        lines.append("Open the listed live docs first, then move into the phase-local session command once re-entry is stable.")
+    elif routine == "move-to-prose":
+        lines.append("Use this packet to decide whether prose should start now or whether blockers still need one more pass.")
+    elif routine == "repair-cycle":
+        lines.append("Use this packet to identify the dominant failure, set the repair direction, and keep rejected material cut unless evidence says otherwise.")
+    elif routine == "session-end":
+        lines.append("Use this packet to preserve the real next-session starting position, not a vague summary.")
+    elif routine == "chapter-end":
+        lines.append("Use this packet to confirm closeout safety before the chapter-end write flow runs.")
+
+    if file_targets:
+        lines.append("Open these files first:")
+        lines.extend(f"- {item}" for item in file_targets[:5])
+    elif doc_loadout:
+        lines.append("Open this doc loadout first:")
+        lines.extend(f"- {item}" for item in doc_loadout[:5])
+
+    if top_findings:
+        lines.append("Continuity findings worth caring about now:")
+        for finding in top_findings[:3]:
+            lines.append(f"- [{finding['severity'].upper()}] {finding['title']}: {finding['summary']}")
+
+    if next_phase_command:
+        lines.append(f"Next phase-local command after this packet: `{next_phase_command}`")
+
+    lines.append("Use the exact commands supplied by this helper packet instead of inventing new workflow steps.")
+    return "\n".join(lines)
+
+
+def build_writing_automation(
+    vault_dir: str,
+    project: str | None = None,
+    out_dir: str = None,
+    codex_home: str = None,
+    config_path: str = None,
+    brainstorm_paths=None,
+    audit_paths=None,
+    discarded_paths=None,
+    palace_path: str = None,
+    runtime_root: str = None,
+    sync: str = "if-needed",
+    refresh_palace: bool = False,
+    name: str = "recommended",
+    target: str = "codex",
+    verify_mode: str = "advisory",
+    n_results: int = 3,
+) -> dict:
+    if name not in AUTOMATE_NAMES:
+        raise ValueError(f"Unknown writing automation name: {name}")
+    if target not in AUTOMATE_TARGETS:
+        raise ValueError(f"Unknown writing automation target: {target}")
+    if verify_mode not in BUNDLE_VERIFY_MODES:
+        raise ValueError(f"Unknown writing automation verify mode: {verify_mode}")
+
+    resolved_name = name
+    if name == "recommended":
+        status = get_writing_sidecar_status(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+        )
+        project_root = Path(status["project_root"])
+        doc_bundle = _load_live_doc_bundle(project_root)
+        verification = _cached_verification_summary(Path(status["output_root"]))
+        workflow_checks = _collect_workflow_checks(project_root)
+        recommendations = _workflow_recommendations(
+            project_root=str(project_root),
+            state=status["state"],
+            stale=status["stale"],
+            operative_phase=_derive_operative_phase(doc_bundle, _extract_phase(doc_bundle)),
+            status_text=_extract_field(doc_bundle, "status"),
+            next_action=_extract_field(doc_bundle, "next_action"),
+            continuity_state=verification["continuity_state"],
+            verification_stale=verification["verification_stale"],
+            assistant_ready=_assistant_ready(workflow_checks),
+        )
+        resolved_name = recommendations["recommended_routine"]
+
+    routine_packet = build_writing_routine(
+        vault_dir=vault_dir,
+        project=project,
+        out_dir=out_dir,
+        codex_home=codex_home,
+        config_path=config_path,
+        brainstorm_paths=brainstorm_paths,
+        audit_paths=audit_paths,
+        discarded_paths=discarded_paths,
+        palace_path=palace_path,
+        runtime_root=runtime_root,
+        sync=sync,
+        refresh_palace=refresh_palace,
+        name=resolved_name,
+        verify_mode=verify_mode,
+        notes=None,
+        write=False,
+        n_results=n_results,
+    )
+
+    entry_command = _automation_entry_command(
+        project_root=routine_packet["project_root"],
+        routine=resolved_name,
+        verify_mode=verify_mode,
+        sync=sync,
+    )
+    write_variant_command = _automation_write_variant_command(
+        project_root=routine_packet["project_root"],
+        routine=resolved_name,
+        verify_mode=verify_mode,
+        sync=sync,
+    )
+    recommended_commands = _unique_lines(
+        [item for item in (entry_command, write_variant_command) if item]
+        + list(routine_packet.get("recommended_commands", []))
+    )
+
+    return {
+        "project": routine_packet["project"],
+        "project_root": routine_packet["project_root"],
+        "vault_root": routine_packet["vault_root"],
+        "target": target,
+        "name": name,
+        "routine": resolved_name,
+        "state": routine_packet["state"],
+        "stale": routine_packet["stale"],
+        "reasons": list(routine_packet.get("reasons", [])),
+        "last_synced_at": routine_packet.get("last_synced_at"),
+        "operative_phase": routine_packet.get("operative_phase"),
+        "continuity_state": routine_packet.get("continuity_state"),
+        "finding_counts": dict(routine_packet.get("finding_counts", {"error": 0, "warn": 0, "info": 0})),
+        "top_findings": list(routine_packet.get("top_findings", [])),
+        "doc_loadout": list(routine_packet.get("doc_loadout", [])),
+        "file_targets": list(routine_packet.get("file_targets", [])),
+        "artifact_targets": list(routine_packet.get("artifact_targets", [])),
+        "entry_command": entry_command,
+        "write_variant_command": write_variant_command,
+        "prompt": _automation_prompt(
+            routine=resolved_name,
+            entry_command=entry_command,
+            write_variant_command=write_variant_command,
+            routine_packet=routine_packet,
+        ),
+        "expected_outputs": _automation_expected_outputs(resolved_name),
+        "recommended_actions": list(routine_packet.get("recommended_actions", [])),
+        "recommended_commands": recommended_commands,
+        "warnings": list(routine_packet.get("warnings", [])),
+    }
+
+
+def render_writing_automation(automation_data: dict) -> str:
+    lines = [
+        "",
+        "=" * 60,
+        f"  Writing Sidecar Automate ({automation_data['name']} -> {automation_data['routine']})",
+        "=" * 60,
+        f"  Project:      {automation_data['project_root']}",
+        f"  Target:       {automation_data['target']}",
+        f"  State:        {automation_data['state'].upper()}",
+    ]
+    if automation_data.get("operative_phase"):
+        lines.append(f"  Active phase: {automation_data['operative_phase']}")
+    if automation_data.get("last_synced_at"):
+        lines.append(f"  Synced:       {automation_data['last_synced_at']}")
+    lines.append(
+        "  Continuity:   "
+        f"{str(automation_data.get('continuity_state', 'unknown')).upper()} "
+        f"(errors={automation_data['finding_counts'].get('error', 0)} "
+        f"warns={automation_data['finding_counts'].get('warn', 0)} "
+        f"info={automation_data['finding_counts'].get('info', 0)})"
+    )
+    lines.append(f"  Entry:        {automation_data['entry_command']}")
+    if automation_data.get("write_variant_command"):
+        lines.append(f"  Write variant:{' ' * 2}{automation_data['write_variant_command']}")
+
+    if automation_data.get("warnings"):
+        lines.append("\n  Warnings:")
+        for item in automation_data["warnings"]:
+            lines.append(f"    - {item}")
+
+    if automation_data.get("top_findings"):
+        lines.append("\n  Top findings:")
+        for item in automation_data["top_findings"]:
+            lines.append(f"    - [{item['severity'].upper()}] {item['title']}")
+
+    if automation_data.get("doc_loadout"):
+        lines.append("\n  Doc loadout:")
+        for item in automation_data["doc_loadout"]:
+            lines.append(f"    - {item}")
+
+    if automation_data.get("file_targets"):
+        lines.append("\n  File targets:")
+        for item in automation_data["file_targets"]:
+            lines.append(f"    - {item}")
+
+    if automation_data.get("artifact_targets"):
+        lines.append("\n  Artifact targets:")
+        for item in automation_data["artifact_targets"]:
+            lines.append(f"    - {item}")
+
+    if automation_data.get("expected_outputs"):
+        lines.append("\n  Expected outputs:")
+        for item in automation_data["expected_outputs"]:
+            lines.append(f"    - {item}")
+
+    lines.append("\n  Codex helper prompt:")
+    for line in automation_data["prompt"].splitlines():
+        lines.append(f"    {line}")
+
+    if automation_data.get("recommended_actions"):
+        lines.append("\n  Recommended actions:")
+        for item in automation_data["recommended_actions"]:
+            lines.append(f"    - {item}")
+
+    if automation_data.get("recommended_commands"):
+        lines.append("\n  Recommended commands:")
+        for item in automation_data["recommended_commands"]:
+            lines.append(f"    - {item}")
+
+    lines.extend(["", "=" * 60, ""])
+    return "\n".join(lines)
+
+
+def print_writing_automation(automation_data: dict):
+    print(render_writing_automation(automation_data))
 
 
 def maintain_writing_sidecar(
@@ -6948,7 +7365,8 @@ def doctor_writing_sidecar(
     verification = _cached_verification_summary(Path(context["output_root"]))
     doc_bundle = _load_live_doc_bundle(project_root)
     operative_phase = _derive_operative_phase(doc_bundle, _extract_phase(doc_bundle))
-    recommended_routine = _recommended_routine(
+    recommendations = _workflow_recommendations(
+        project_root=str(project_root),
         state="clean",
         stale=False,
         operative_phase=operative_phase,
@@ -6956,6 +7374,7 @@ def doctor_writing_sidecar(
         next_action=_extract_field(doc_bundle, "next_action"),
         continuity_state=verification["continuity_state"],
         verification_stale=verification["verification_stale"],
+        assistant_ready=assistant_ready,
     )
 
     if version is None:
@@ -7042,8 +7461,9 @@ def doctor_writing_sidecar(
         "checks": checks,
         "workflow_checks": workflow_checks,
         "assistant_ready": assistant_ready,
-        "recommended_entrypoint": _recommended_entrypoint(),
-        "recommended_routine": recommended_routine,
+        "recommended_entrypoint": recommendations["recommended_entrypoint"],
+        "recommended_routine": recommendations["recommended_routine"],
+        "recommended_automate_command": recommendations["recommended_automate_command"],
         "continuity_state": verification["continuity_state"],
         "last_verified_at": verification["last_verified_at"],
         "finding_counts": verification["finding_counts"],
@@ -7095,6 +7515,8 @@ def print_doctor_report(report: dict):
     print(f"\n  Assistant ready: {'YES' if report.get('assistant_ready') else 'NO'}")
     if report.get("recommended_entrypoint"):
         print(f"  Entry point:     {report['recommended_entrypoint']}")
+    if report.get("recommended_automate_command"):
+        print(f"  Automate:        {report['recommended_automate_command']}")
     if report.get("recommended_routine"):
         print(f"  Next routine:    {report['recommended_routine']}")
     continuity = (report.get("continuity_state") or "unknown").upper()
