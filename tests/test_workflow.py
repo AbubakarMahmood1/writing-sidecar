@@ -868,6 +868,8 @@ def test_doctor_reports_supported_version_and_writable_paths(monkeypatch, capsys
         assert all(item["status"] == "ok" for item in report["workflow_checks"])
         assert report["recommended_entrypoint"] == "writing-sidecar automate"
         assert "writing-sidecar automate" in report["recommended_automate_command"]
+        assert " --mode suggested-create" in report["recommended_automation_command"]
+        assert report["recommended_schedule_profile"] in {"weekday-morning", "weekday-evening", "daily-evening", "weekly-review"}
         assert "Writing Sidecar Doctor" in output
     finally:
         cleanup_temp_dir(tmp_path)
@@ -987,6 +989,8 @@ def test_list_writing_projects_reports_states():
         assert projects["Witcher-DC"]["operative_phase"] == "SCRIPTING"
         assert projects["Witcher-DC"]["recommended_entrypoint"] == "writing-sidecar automate"
         assert "writing-sidecar automate" in projects["Witcher-DC"]["recommended_automate_command"]
+        assert " --mode suggested-create" in projects["Witcher-DC"]["recommended_automation_command"]
+        assert projects["Witcher-DC"]["recommended_schedule_profile"] == "weekday-morning"
     finally:
         cleanup_temp_dir(tmp_path)
 
@@ -2498,6 +2502,104 @@ def test_build_writing_automation_session_end_defaults_to_write(monkeypatch):
     assert report["write_variant_command"] is None
 
 
+def test_build_writing_automation_suggested_create_uses_default_schedule_profile(monkeypatch):
+    monkeypatch.setattr(
+        "writing_sidecar.workflow.build_writing_routine",
+        lambda **kwargs: {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "routine": kwargs["name"],
+            "verify_mode": kwargs["verify_mode"],
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "operative_phase": "SCRIPTING",
+            "continuity_state": "warn",
+            "finding_counts": {"error": 0, "warn": 1, "info": 0},
+            "top_findings": [
+                {
+                    "severity": "warn",
+                    "title": "Checkpoint missing",
+                    "summary": "There is no fresh startup checkpoint yet.",
+                }
+            ],
+            "doc_loadout": ["_story_bible/05_Current_Chapter_Notes.md"],
+            "file_targets": ["C:/vault/Witcher-DC/_story_bible/05_Current_Chapter_Notes.md"],
+            "artifact_targets": ["C:/vault/Witcher-DC/logs/checkpoints/2026-04-10_startup_checkpoint.md"],
+            "recap_sections": {},
+            "steps": [],
+            "recommended_actions": ["Open the chapter notes first."],
+            "recommended_commands": ['writing-sidecar session "C:/vault/Witcher-DC" --task prose --write'],
+            "write_performed": False,
+            "paths_written": [],
+            "sync_performed": False,
+            "warnings": [],
+        },
+    )
+
+    report = build_writing_automation(
+        "C:/vault",
+        project="Witcher-DC",
+        name="move-to-prose",
+        mode="suggested-create",
+    )
+
+    assert report["routine"] == "move-to-prose"
+    assert report["schedule_profile"] == "weekday-morning"
+    assert report["automation_name"] == "Witcher-DC Move To Prose"
+    assert report["automation_status"] == "ACTIVE"
+    assert report["automation_rrule"] == "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0"
+    assert report["automation_cwds"] == ["C:/vault/Witcher-DC"]
+    assert "Run this exact command first" in report["automation_prompt"]
+    assert "Do not mutate canon or current-doc files" in report["automation_prompt"]
+
+
+def test_build_writing_automation_suggested_create_honors_schedule_override(monkeypatch):
+    monkeypatch.setattr(
+        "writing_sidecar.workflow.build_writing_routine",
+        lambda **kwargs: {
+            "project": "Witcher-DC",
+            "project_root": "C:/vault/Witcher-DC",
+            "vault_root": "C:/vault",
+            "routine": kwargs["name"],
+            "verify_mode": kwargs["verify_mode"],
+            "state": "clean",
+            "stale": False,
+            "reasons": [],
+            "last_synced_at": "2026-04-10T00:00:00+00:00",
+            "operative_phase": "AUDIT",
+            "continuity_state": "warn",
+            "finding_counts": {"error": 0, "warn": 1, "info": 0},
+            "top_findings": [],
+            "doc_loadout": [],
+            "file_targets": [],
+            "artifact_targets": ["C:/vault/Witcher-DC/logs/audits/audit.md"],
+            "recap_sections": {},
+            "steps": [],
+            "recommended_actions": [],
+            "recommended_commands": [],
+            "write_performed": False,
+            "paths_written": [],
+            "sync_performed": False,
+            "warnings": [],
+        },
+    )
+
+    report = build_writing_automation(
+        "C:/vault",
+        project="Witcher-DC",
+        name="repair-cycle",
+        mode="suggested-create",
+        schedule_profile="weekly-review",
+    )
+
+    assert report["schedule_profile"] == "weekly-review"
+    assert report["automation_rrule"] == "FREQ=WEEKLY;BYDAY=SA;BYHOUR=10;BYMINUTE=0"
+    assert report["entry_command"] == 'writing-sidecar routine "C:/vault/Witcher-DC" --name repair-cycle --verify advisory'
+
+
 def test_cli_json_output_for_status_context_projects_doctor_session_verify_and_automate(monkeypatch, capsys):
     import writing_sidecar.cli as cli
 
@@ -2559,6 +2661,8 @@ def test_cli_json_output_for_status_context_projects_doctor_session_verify_and_a
             "recommended_entrypoint": "writing-sidecar automate",
             "recommended_routine": "move-to-prose",
             "recommended_automate_command": 'writing-sidecar automate "C:/vault/Witcher-DC" --name move-to-prose',
+            "recommended_automation_command": 'writing-sidecar automate "C:/vault/Witcher-DC" --name move-to-prose --mode suggested-create',
+            "recommended_schedule_profile": "weekday-morning",
             "continuity_state": "warn",
             "last_verified_at": "2026-04-10T00:00:00+00:00",
             "finding_counts": {"error": 0, "warn": 1, "info": 0},
@@ -2583,6 +2687,8 @@ def test_cli_json_output_for_status_context_projects_doctor_session_verify_and_a
                      "recommended_entrypoint": "writing-sidecar automate",
                      "recommended_routine": "move-to-prose",
                      "recommended_automate_command": 'writing-sidecar automate "C:/vault/Witcher-DC" --name move-to-prose',
+                     "recommended_automation_command": 'writing-sidecar automate "C:/vault/Witcher-DC" --name move-to-prose --mode suggested-create',
+                     "recommended_schedule_profile": "weekday-morning",
                      "continuity_state": "warn",
                      "last_verified_at": "2026-04-10T00:00:00+00:00",
                      "finding_counts": {"error": 0, "warn": 1, "info": 0},
@@ -2730,6 +2836,15 @@ def test_cli_json_output_for_status_context_projects_doctor_session_verify_and_a
             "recommended_commands": ['writing-sidecar routine "C:/vault/Witcher-DC" --name move-to-prose --verify advisory'],
             "warnings": [],
         }
+        suggested_automate_payload = {
+            **automate_payload,
+            "automation_name": "Witcher-DC Move To Prose",
+            "automation_prompt": "automation-prompt",
+            "automation_rrule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+            "automation_cwds": ["C:/vault/Witcher-DC"],
+            "automation_status": "ACTIVE",
+            "schedule_profile": "weekday-morning",
+        }
 
         monkeypatch.setattr(cli, "get_writing_sidecar_status", lambda **kwargs: status_payload)
         monkeypatch.setattr(cli, "build_writing_context", lambda **kwargs: context_payload)
@@ -2739,7 +2854,11 @@ def test_cli_json_output_for_status_context_projects_doctor_session_verify_and_a
         monkeypatch.setattr(cli, "build_writing_session", lambda **kwargs: session_payload)
         monkeypatch.setattr(cli, "build_writing_bundle", lambda **kwargs: bundle_payload)
         monkeypatch.setattr(cli, "build_writing_routine", lambda **kwargs: routine_payload)
-        monkeypatch.setattr(cli, "build_writing_automation", lambda **kwargs: automate_payload)
+        monkeypatch.setattr(
+            cli,
+            "build_writing_automation",
+            lambda **kwargs: suggested_automate_payload if kwargs.get("mode") == "suggested-create" else automate_payload,
+        )
 
         for argv, key in (
             (["writing-sidecar", "status", str(tmp_path), "--project", "Witcher-DC", "--format", "json"], "state"),
@@ -2756,6 +2875,15 @@ def test_cli_json_output_for_status_context_projects_doctor_session_verify_and_a
             cli.main(sys.argv[1:])
             parsed = json.loads(capsys.readouterr().out)
             assert key in parsed
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["writing-sidecar", "automate", str(tmp_path), "--project", "Witcher-DC", "--mode", "suggested-create", "--format", "json"],
+        )
+        cli.main(sys.argv[1:])
+        parsed = json.loads(capsys.readouterr().out)
+        assert parsed["automation_name"] == "Witcher-DC Move To Prose"
     finally:
         cleanup_temp_dir(tmp_path)
 
@@ -3381,6 +3509,7 @@ def test_doctor_marks_missing_agents_as_warn_but_keeps_assistant_ready_true():
         assert report["recommended_entrypoint"] == "writing-sidecar automate"
         assert report["recommended_routine"] in {"move-to-prose", "start-work"}
         assert "writing-sidecar automate" in report["recommended_automate_command"]
+        assert " --mode suggested-create" in report["recommended_automation_command"]
     finally:
         cleanup_temp_dir(tmp_path)
 

@@ -40,6 +40,7 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 ## Practical AI behavior
 
 - start with `writing-sidecar automate --name recommended` when entering a sidecar-enabled project
+- if you want recurring Codex help, run `writing-sidecar automate --mode suggested-create --name recommended`; this emits a suggestion packet only
 - use `writing-sidecar automate --name move-to-prose` before moving into prose
 - use `writing-sidecar automate --name repair-cycle` when audit/debug work starts
 - use `writing-sidecar automate --name session-end|chapter-end` at real transitions
@@ -63,11 +64,11 @@ Recommended order:
 
 1. `writing-sidecar doctor <vault-or-project> --project <name>`
 2. `writing-sidecar automate <vault-or-project> --project <name> --name recommended`
-3. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose --write` for phase-local work
-4. `writing-sidecar automate <vault-or-project> --project <name> --name move-to-prose` before prose starts
-5. `writing-sidecar automate <vault-or-project> --project <name> --name repair-cycle`
-6. `writing-sidecar automate <vault-or-project> --project <name> --name session-end|chapter-end`
-7. use `routine`, `bundle`, `search`, `verify`, `recap`, or `maintain` only when you need narrower control
+3. `writing-sidecar automate <vault-or-project> --project <name> --mode suggested-create --name recommended` when you want a Codex automation suggestion packet
+4. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose --write` for phase-local work
+5. `writing-sidecar routine <vault-or-project> --project <name> --name move-to-prose|repair-cycle|session-end|chapter-end` when you want the lower-level packet directly
+6. `writing-sidecar bundle <vault-or-project> --project <name> --name startup|pre-prose|audit-loop|handoff|closeout` only when you want the transition primitive directly
+7. use `search`, `verify`, `recap`, or `maintain` only when you need narrower control
 
 ## JSON output
 
@@ -84,6 +85,8 @@ If another tool or assistant layer needs machine-readable output, use `--format 
 - `bundle`
 - `routine`
 - `automate`
+
+`automate --mode helper` keeps the immediate V9 helper shape. `automate --mode suggested-create` adds Codex automation suggestion fields without creating or editing an automation.
 
 Visible helper output is available on:
 

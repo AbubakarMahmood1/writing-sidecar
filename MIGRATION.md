@@ -36,6 +36,7 @@ The standalone CLI replaces the fork-only `mempalace writing-*` commands.
 - v7 adds `writing-sidecar bundle` as the preferred transition-level workflow entrypoint
 - v8 adds `writing-sidecar routine` as the default assistant-facing workflow layer for common work sessions
 - v9 adds `writing-sidecar automate` as the default Codex-facing helper/export layer
+- v10 extends `writing-sidecar automate` with `--mode suggested-create` and built-in schedule profiles for Codex automation suggestion packets
 - startup no longer needs to be a manual `status` + `search` ritual unless you want lower-level control
 - sidecar-safe writeback is now explicit and preview-first instead of being a doc-only habit
 - JSON output is now stable enough for assistant glue through `--format json`
@@ -50,13 +51,14 @@ The standalone CLI replaces the fork-only `mempalace writing-*` commands.
 2. Install `writing-sidecar`.
 3. Run `writing-sidecar doctor <vault> --project <name>`.
 4. Run `writing-sidecar automate <vault> --project <name> --name recommended`.
-5. Run `writing-sidecar automate <vault> --project <name> --name move-to-prose` before prose starts.
+5. If you want recurring Codex help for that project, run `writing-sidecar automate <vault> --project <name> --mode suggested-create --name recommended`.
 6. When actual work begins, run `writing-sidecar session <vault> --project <name> --task braindump|scripting|staging|prose --write`.
-7. Run `writing-sidecar automate <vault> --project <name> --name repair-cycle` during audit/debug transitions.
-8. Run `writing-sidecar automate <vault> --project <name> --name session-end|chapter-end` at real transitions.
+7. Use `writing-sidecar routine <vault> --project <name> --name move-to-prose|repair-cycle|session-end|chapter-end` when you want the lower-level transition packet directly.
+8. Use `writing-sidecar bundle <vault> --project <name> --name startup|pre-prose|audit-loop|handoff|closeout` only when you want the transition primitive directly.
 9. Treat `planning` as a broad compatibility umbrella, not the preferred long-term phase name.
-10. Use `writing-sidecar routine ...`, `bundle ...`, `verify ...`, `search ...`, `recap ...`, or `maintain ...` only for narrower control.
+10. Use `verify ...`, `search ...`, `recap ...`, or `maintain ...` only for narrower control.
 11. Switch automation, docs, and habits from `mempalace writing-*` to `writing-sidecar *`.
+12. Treat `--mode suggested-create` output as a suggestion packet only; it does not create or edit an automation for you.
 
 Lower-level commands still exist when you want narrower control:
 - `context`
@@ -69,8 +71,8 @@ Examples:
 
 ```bash
 writing-sidecar automate C:/vault --project Witcher-DC --name recommended
-writing-sidecar automate C:/vault --project Witcher-DC --name move-to-prose --out C:/vault/.sidecar-packets/pre-prose.txt
-writing-sidecar automate C:/vault --project Witcher-DC --name repair-cycle
+writing-sidecar automate C:/vault --project Witcher-DC --mode suggested-create --name recommended
+writing-sidecar automate C:/vault --project Witcher-DC --mode suggested-create --name move-to-prose --out C:/vault/.sidecar-packets/pre-prose-automation.txt
 writing-sidecar session C:/vault --project Witcher-DC --task scripting --write --out C:/vault/.sidecar-packets/scripting.txt
 writing-sidecar verify C:/vault --project Witcher-DC --scope chapter
 writing-sidecar projects C:/vault --format json

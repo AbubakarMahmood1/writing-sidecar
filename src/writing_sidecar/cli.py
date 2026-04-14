@@ -8,6 +8,8 @@ from pathlib import Path
 from .mempalace_adapter import MempalaceCompatibilityError, search as raw_search
 from .workflow import (
     AUTOMATE_NAMES,
+    AUTOMATE_MODES,
+    AUTOMATE_SCHEDULE_PROFILES,
     AUTOMATE_TARGETS,
     BUNDLE_NAMES,
     BUNDLE_VERIFY_MODES,
@@ -584,7 +586,9 @@ def cmd_automate(args):
         refresh_palace=args.refresh_palace,
         name=args.name,
         target=args.target,
+        mode=args.mode,
         verify_mode=args.verify,
+        schedule_profile=args.schedule_profile,
         n_results=args.results,
     )
     if args.format == "json":
@@ -885,7 +889,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_routine.add_argument("--out", default=None, help="Optional output path for the rendered routine packet")
     _add_format_arg(p_routine)
 
-    p_automate = sub.add_parser("automate", help="Build a Codex-ready one-shot helper packet")
+    p_automate = sub.add_parser("automate", help="Build a Codex-ready helper or automation suggestion packet")
     _shared_project_args(p_automate, include_sidecar_out=False)
     p_automate.add_argument(
         "--sidecar-out",
@@ -905,6 +909,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Helper target (default: codex)",
     )
     p_automate.add_argument(
+        "--mode",
+        choices=AUTOMATE_MODES,
+        default="helper",
+        help="Automation packet mode (default: helper)",
+    )
+    p_automate.add_argument(
         "--sync",
         choices=["always", "if-needed", "never"],
         default="if-needed",
@@ -915,6 +925,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=BUNDLE_VERIFY_MODES,
         default="advisory",
         help="How helper generation should handle verification (default: advisory)",
+    )
+    p_automate.add_argument(
+        "--schedule-profile",
+        choices=AUTOMATE_SCHEDULE_PROFILES,
+        default="recommended",
+        help="Suggested-create schedule profile (default: recommended)",
     )
     p_automate.add_argument("--refresh-palace", action="store_true", help="Rebuild the target palace before mining")
     p_automate.add_argument("--results", type=int, default=3, help="Number of hits per helper query")

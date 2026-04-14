@@ -55,6 +55,28 @@ BUNDLE_VERIFY_MODES = ("advisory", "strict", "skip")
 ROUTINE_NAMES = ("start-work", "move-to-prose", "repair-cycle", "session-end", "chapter-end")
 AUTOMATE_NAMES = ("recommended",) + ROUTINE_NAMES
 AUTOMATE_TARGETS = ("codex",)
+AUTOMATE_MODES = ("helper", "suggested-create")
+AUTOMATE_SCHEDULE_PROFILES = (
+    "recommended",
+    "weekday-morning",
+    "weekday-evening",
+    "daily-evening",
+    "weekly-review",
+)
+AUTOMATE_STATUS = "ACTIVE"
+AUTOMATE_DEFAULT_SCHEDULE_PROFILES = {
+    "start-work": "weekday-morning",
+    "move-to-prose": "weekday-morning",
+    "repair-cycle": "weekday-evening",
+    "session-end": "daily-evening",
+    "chapter-end": "weekly-review",
+}
+AUTOMATE_SCHEDULE_RRULES = {
+    "weekday-morning": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+    "weekday-evening": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=19;BYMINUTE=0",
+    "daily-evening": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=20;BYMINUTE=0",
+    "weekly-review": "FREQ=WEEKLY;BYDAY=SA;BYHOUR=10;BYMINUTE=0",
+}
 SESSION_TASKS = (
     "startup",
     "braindump",
@@ -1170,18 +1192,46 @@ def _automation_command(
     name: str,
     *,
     target: str = "codex",
+    mode: str = "helper",
     verify_mode: str = "advisory",
     sync: str = "if-needed",
+    schedule_profile: str = "recommended",
 ) -> str:
     project_bits = f" --project {project}" if project else ""
     command = f'writing-sidecar automate "{vault_dir}"{project_bits} --name {name}'
     if target != "codex":
         command += f" --target {target}"
+    if mode != "helper":
+        command += f" --mode {mode}"
     if verify_mode != "advisory":
         command += f" --verify {verify_mode}"
     if sync != "if-needed":
         command += f" --sync {sync}"
+    if schedule_profile != "recommended":
+        command += f" --schedule-profile {schedule_profile}"
     return command
+
+
+def _automation_schedule_profile_for_routine(routine: str) -> str:
+    return AUTOMATE_DEFAULT_SCHEDULE_PROFILES[routine]
+
+
+def _resolve_automation_schedule_profile(routine: str, schedule_profile: str) -> str:
+    if schedule_profile == "recommended":
+        return _automation_schedule_profile_for_routine(routine)
+    return schedule_profile
+
+
+def _automation_schedule_rrule(schedule_profile: str) -> str:
+    return AUTOMATE_SCHEDULE_RRULES[schedule_profile]
+
+
+def _automation_label(name: str) -> str:
+    return name.replace("-", " ").title()
+
+
+def _automation_suggestion_name(project: str, routine: str) -> str:
+    return f"{project} {_automation_label(routine)}"
 
 
 def _workflow_recommendations(
@@ -1224,6 +1274,13 @@ def _workflow_recommendations(
             None,
             automate_name,
         ),
+        "recommended_automation_command": _automation_command(
+            project_root,
+            None,
+            automate_name,
+            mode="suggested-create",
+        ),
+        "recommended_schedule_profile": _automation_schedule_profile_for_routine(recommended_routine),
     }
 
 
@@ -1343,6 +1400,8 @@ def list_writing_projects(vault_dir: str) -> dict:
                 "recommended_entrypoint": recommendations["recommended_entrypoint"],
                 "recommended_routine": recommendations["recommended_routine"],
                 "recommended_automate_command": recommendations["recommended_automate_command"],
+                "recommended_automation_command": recommendations["recommended_automation_command"],
+                "recommended_schedule_profile": recommendations["recommended_schedule_profile"],
                 "continuity_state": verification["continuity_state"],
                 "last_verified_at": verification["last_verified_at"],
                 "finding_counts": verification["finding_counts"],
@@ -1383,6 +1442,10 @@ def print_writing_projects(report: dict):
             print(f"    Entry:  {item['recommended_entrypoint']}")
         if item.get("recommended_automate_command"):
             print(f"    Automate: {item['recommended_automate_command']}")
+        if item.get("recommended_automation_command"):
+            print(f"    Suggest:  {item['recommended_automation_command']}")
+        if item.get("recommended_schedule_profile"):
+            print(f"    Schedule: {item['recommended_schedule_profile']}")
         if item.get("recommended_routine"):
             print(f"    Routine: {item['recommended_routine']}")
         continuity = (item.get("continuity_state") or "unknown").upper()
@@ -3058,6 +3121,66 @@ def _automation_prompt(
     return "\n".join(lines)
 
 
+def _automation_suggestion_prompt(
+    *,
+    routine: str,
+    entry_command: str,
+    write_variant_command: str | None,
+    routine_packet: dict,
+) -> str:
+    file_targets = list(routine_packet.get("file_targets", []))
+    doc_loadout = list(routine_packet.get("doc_loadout", []))
+    top_findings = list(routine_packet.get("top_findings", []))
+    artifact_targets = list(routine_packet.get("artifact_targets", []))
+    next_phase_command = next(
+        (item for item in routine_packet.get("recommended_commands", []) if "writing-sidecar session" in item),
+        None,
+    )
+
+    lines = [
+        f"You are running the `{routine}` writing-sidecar automation for this project.",
+        "Live docs outrank sidecar and checkpoint evidence whenever they disagree.",
+        "Do not mutate canon or current-doc files, and do not perform silent writes.",
+        f"Run this exact command first: `{entry_command}`",
+    ]
+
+    if routine == "start-work":
+        lines.append("Open the listed live docs first, then hand back the next phase-local session command once re-entry is stable.")
+    elif routine == "move-to-prose":
+        lines.append("Assess prose readiness, highlight blockers and continuity watch items, and say whether drafting should start now.")
+    elif routine == "repair-cycle":
+        lines.append("Identify the dominant failure, set the repair direction, and keep rejected material cut unless evidence clearly restores it.")
+    elif routine == "session-end":
+        lines.append("Use the persisted handoff flow so the next session starts from a concrete carry-forward position.")
+    elif routine == "chapter-end":
+        lines.append("Use the persisted closeout flow and call out anything that still needs to surface in live docs before the next chapter cycle.")
+
+    if file_targets:
+        lines.append("Open these files first:")
+        lines.extend(f"- {item}" for item in file_targets[:5])
+    elif doc_loadout:
+        lines.append("Open this doc loadout first:")
+        lines.extend(f"- {item}" for item in doc_loadout[:5])
+
+    if top_findings:
+        lines.append("Continuity findings worth caring about now:")
+        for finding in top_findings[:3]:
+            lines.append(f"- [{finding['severity'].upper()}] {finding['title']}: {finding['summary']}")
+
+    if artifact_targets:
+        lines.append("Sidecar-safe artifact targets in play:")
+        lines.extend(f"- {item}" for item in artifact_targets[:4])
+
+    if next_phase_command:
+        lines.append(f"After the automation packet lands, the next phase-local command should be: `{next_phase_command}`")
+
+    if write_variant_command:
+        lines.append(f"If the user wants the persisted sidecar-safe variant after review, use: `{write_variant_command}`")
+
+    lines.append("Use only the exact commands supplied by this packet.")
+    return "\n".join(lines)
+
+
 def build_writing_automation(
     vault_dir: str,
     project: str | None = None,
@@ -3073,15 +3196,21 @@ def build_writing_automation(
     refresh_palace: bool = False,
     name: str = "recommended",
     target: str = "codex",
+    mode: str = "helper",
     verify_mode: str = "advisory",
+    schedule_profile: str = "recommended",
     n_results: int = 3,
 ) -> dict:
     if name not in AUTOMATE_NAMES:
         raise ValueError(f"Unknown writing automation name: {name}")
     if target not in AUTOMATE_TARGETS:
         raise ValueError(f"Unknown writing automation target: {target}")
+    if mode not in AUTOMATE_MODES:
+        raise ValueError(f"Unknown writing automation mode: {mode}")
     if verify_mode not in BUNDLE_VERIFY_MODES:
         raise ValueError(f"Unknown writing automation verify mode: {verify_mode}")
+    if schedule_profile not in AUTOMATE_SCHEDULE_PROFILES:
+        raise ValueError(f"Unknown writing automation schedule profile: {schedule_profile}")
 
     resolved_name = name
     if name == "recommended":
@@ -3151,7 +3280,7 @@ def build_writing_automation(
         + list(routine_packet.get("recommended_commands", []))
     )
 
-    return {
+    report = {
         "project": routine_packet["project"],
         "project_root": routine_packet["project_root"],
         "vault_root": routine_packet["vault_root"],
@@ -3183,8 +3312,113 @@ def build_writing_automation(
         "warnings": list(routine_packet.get("warnings", [])),
     }
 
+    if mode == "helper":
+        return report
+
+    resolved_schedule_profile = _resolve_automation_schedule_profile(resolved_name, schedule_profile)
+    report.update(
+        {
+            "automation_name": _automation_suggestion_name(report["project"], resolved_name),
+            "automation_prompt": _automation_suggestion_prompt(
+                routine=resolved_name,
+                entry_command=entry_command,
+                write_variant_command=write_variant_command,
+                routine_packet=routine_packet,
+            ),
+            "automation_rrule": _automation_schedule_rrule(resolved_schedule_profile),
+            "automation_cwds": [report["project_root"]],
+            "automation_status": AUTOMATE_STATUS,
+            "schedule_profile": resolved_schedule_profile,
+        }
+    )
+    return report
+
 
 def render_writing_automation(automation_data: dict) -> str:
+    if automation_data.get("automation_name"):
+        lines = [
+            "",
+            "=" * 60,
+            f"  Writing Sidecar Automate Suggestion ({automation_data['name']} -> {automation_data['routine']})",
+            "=" * 60,
+            f"  Project:      {automation_data['project_root']}",
+            f"  Target:       {automation_data['target']}",
+            f"  State:        {automation_data['state'].upper()}",
+            f"  Schedule:     {automation_data['schedule_profile']}",
+            f"  Automation:   {automation_data['automation_name']}",
+            f"  Status:       {automation_data['automation_status']}",
+            f"  RRULE:        {automation_data['automation_rrule']}",
+        ]
+        if automation_data.get("operative_phase"):
+            lines.append(f"  Active phase: {automation_data['operative_phase']}")
+        if automation_data.get("last_synced_at"):
+            lines.append(f"  Synced:       {automation_data['last_synced_at']}")
+        lines.append(
+            "  Continuity:   "
+            f"{str(automation_data.get('continuity_state', 'unknown')).upper()} "
+            f"(errors={automation_data['finding_counts'].get('error', 0)} "
+            f"warns={automation_data['finding_counts'].get('warn', 0)} "
+            f"info={automation_data['finding_counts'].get('info', 0)})"
+        )
+        lines.append(f"  Entry:        {automation_data['entry_command']}")
+        if automation_data.get("write_variant_command"):
+            lines.append(f"  Write variant:{' ' * 2}{automation_data['write_variant_command']}")
+
+        if automation_data.get("warnings"):
+            lines.append("\n  Warnings:")
+            for item in automation_data["warnings"]:
+                lines.append(f"    - {item}")
+
+        if automation_data.get("top_findings"):
+            lines.append("\n  Top findings:")
+            for item in automation_data["top_findings"]:
+                lines.append(f"    - [{item['severity'].upper()}] {item['title']}")
+
+        if automation_data.get("file_targets"):
+            lines.append("\n  File targets:")
+            for item in automation_data["file_targets"]:
+                lines.append(f"    - {item}")
+        elif automation_data.get("doc_loadout"):
+            lines.append("\n  Doc loadout:")
+            for item in automation_data["doc_loadout"]:
+                lines.append(f"    - {item}")
+
+        if automation_data.get("artifact_targets"):
+            lines.append("\n  Artifact targets:")
+            for item in automation_data["artifact_targets"]:
+                lines.append(f"    - {item}")
+
+        if automation_data.get("automation_cwds"):
+            lines.append("\n  Automation CWDs:")
+            for item in automation_data["automation_cwds"]:
+                lines.append(f"    - {item}")
+
+        if automation_data.get("expected_outputs"):
+            lines.append("\n  Expected outputs:")
+            for item in automation_data["expected_outputs"]:
+                lines.append(f"    - {item}")
+
+        lines.append("\n  Automation prompt:")
+        for line in automation_data["automation_prompt"].splitlines():
+            lines.append(f"    {line}")
+
+        lines.append("\n  Helper context prompt:")
+        for line in automation_data["prompt"].splitlines():
+            lines.append(f"    {line}")
+
+        if automation_data.get("recommended_actions"):
+            lines.append("\n  Recommended actions:")
+            for item in automation_data["recommended_actions"]:
+                lines.append(f"    - {item}")
+
+        if automation_data.get("recommended_commands"):
+            lines.append("\n  Recommended commands:")
+            for item in automation_data["recommended_commands"]:
+                lines.append(f"    - {item}")
+
+        lines.extend(["", "=" * 60, ""])
+        return "\n".join(lines)
+
     lines = [
         "",
         "=" * 60,
@@ -7464,6 +7698,8 @@ def doctor_writing_sidecar(
         "recommended_entrypoint": recommendations["recommended_entrypoint"],
         "recommended_routine": recommendations["recommended_routine"],
         "recommended_automate_command": recommendations["recommended_automate_command"],
+        "recommended_automation_command": recommendations["recommended_automation_command"],
+        "recommended_schedule_profile": recommendations["recommended_schedule_profile"],
         "continuity_state": verification["continuity_state"],
         "last_verified_at": verification["last_verified_at"],
         "finding_counts": verification["finding_counts"],
@@ -7517,6 +7753,10 @@ def print_doctor_report(report: dict):
         print(f"  Entry point:     {report['recommended_entrypoint']}")
     if report.get("recommended_automate_command"):
         print(f"  Automate:        {report['recommended_automate_command']}")
+    if report.get("recommended_automation_command"):
+        print(f"  Suggest:         {report['recommended_automation_command']}")
+    if report.get("recommended_schedule_profile"):
+        print(f"  Schedule:        {report['recommended_schedule_profile']}")
     if report.get("recommended_routine"):
         print(f"  Next routine:    {report['recommended_routine']}")
     continuity = (report.get("continuity_state") or "unknown").upper()

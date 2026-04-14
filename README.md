@@ -42,6 +42,7 @@ writing-sidecar init <vault-or-project> --project Witcher-DC
 writing-sidecar status <vault-or-project> --project Witcher-DC
 writing-sidecar export <vault-or-project> --project Witcher-DC
 writing-sidecar automate <vault-or-project> --project Witcher-DC --name recommended
+writing-sidecar automate <vault-or-project> --project Witcher-DC --mode suggested-create --name recommended
 writing-sidecar routine <vault-or-project> --project Witcher-DC --name start-work
 writing-sidecar session <vault-or-project> --project Witcher-DC --task scripting
 writing-sidecar context <vault-or-project> --project Witcher-DC
@@ -73,7 +74,7 @@ Structured output is available on:
 - tracks state in `.writing-sidecar-state.json`
 - rebuilds only when inputs actually changed
 - searches by intent instead of dumping all rooms together
-- exports Codex-ready helper packets with deterministic `automate` packets
+- exports Codex-ready helper packets and suggested-create automation packets through deterministic `automate` output
 - packages common work sessions with deterministic `routine` runbooks
 - packages transition moments with deterministic `bundle` runbooks
 - runs a phase-aware assistant workflow with `session`
@@ -124,23 +125,23 @@ Once this package becomes your normal entrypoint, treat `mempalace-fork` as a co
 
 ## Recommended Codex Flow
 
-Use `automate` as the default Codex-facing helper layer, `routine` for lower-level workflow packets, `bundle` for transition primitives, and `session` for phase-local work.
+Use `automate` as the default Codex-facing helper layer. Use `automate --mode suggested-create` only when you want a Codex automation suggestion packet; it does not create or edit an automation by itself. Keep `routine` for lower-level workflow packets, `bundle` for transition primitives, and `session` for phase-local work.
 
 1. `writing-sidecar doctor <vault-or-project> --project <name>` only when setup confidence is low
 2. `writing-sidecar automate <vault-or-project> --project <name> --name recommended`
-3. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose --write` for phase-local work
-4. `writing-sidecar automate <vault-or-project> --project <name> --name move-to-prose` before prose starts
-5. `writing-sidecar automate <vault-or-project> --project <name> --name repair-cycle` during audit/debug work
-6. `writing-sidecar automate <vault-or-project> --project <name> --name session-end|chapter-end` at real transitions
-7. use `routine`, `bundle`, `verify`, `recap`, `search`, or `maintain` only when you need narrower control
+3. `writing-sidecar automate <vault-or-project> --project <name> --mode suggested-create --name recommended` when you want recurring Codex help for that project
+4. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose --write` for phase-local work
+5. `writing-sidecar routine <vault-or-project> --project <name> --name move-to-prose|repair-cycle|session-end|chapter-end` when you want the lower-level workflow packet directly
+6. `writing-sidecar bundle <vault-or-project> --project <name> --name startup|pre-prose|audit-loop|handoff|closeout` only when you want the transition primitive directly
+7. use `verify`, `recap`, `search`, or `maintain` only when you need narrower control
 
 Examples:
 
 ```bash
 writing-sidecar automate C:/vault --project Witcher-DC --name recommended
-writing-sidecar automate C:/vault --project Witcher-DC --name move-to-prose
-writing-sidecar automate C:/vault --project Witcher-DC --name repair-cycle
-writing-sidecar automate C:/vault --project Witcher-DC --name session-end
+writing-sidecar automate C:/vault --project Witcher-DC --mode suggested-create --name recommended
+writing-sidecar automate C:/vault --project Witcher-DC --mode suggested-create --name move-to-prose
+writing-sidecar automate C:/vault --project Witcher-DC --mode suggested-create --name repair-cycle
 writing-sidecar session C:/vault --project Witcher-DC --task scripting --write
 writing-sidecar verify C:/vault --project Witcher-DC --scope timeline
 writing-sidecar projects C:/vault --format json
@@ -149,10 +150,10 @@ writing-sidecar projects C:/vault --format json
 Recommended Codex operating loop:
 
 1. `writing-sidecar automate <vault-or-project> --project <name> --name recommended`
-2. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose --write` for phase-local work
-3. `writing-sidecar automate <vault-or-project> --project <name> --name move-to-prose` before prose starts
-4. `writing-sidecar automate <vault-or-project> --project <name> --name repair-cycle` when review/fix work starts
-5. `writing-sidecar automate <vault-or-project> --project <name> --name session-end|chapter-end` at transitions
+2. `writing-sidecar automate <vault-or-project> --project <name> --mode suggested-create --name recommended` when you want a Codex automation suggestion packet
+3. `writing-sidecar session <vault-or-project> --project <name> --task braindump|scripting|staging|prose --write` for phase-local work
+4. `writing-sidecar routine <vault-or-project> --project <name> --name move-to-prose|repair-cycle|session-end|chapter-end` for lower-level transition packets
+5. `writing-sidecar bundle <vault-or-project> --project <name> --name startup|pre-prose|audit-loop|handoff|closeout` only when you want the transition primitive directly
 6. treat `planning` as a compatibility umbrella, not the preferred long-term phase task
 7. keep live story-bible docs as canon and treat sidecar output as process memory only
 
@@ -174,13 +175,14 @@ Command-specific payload keys remain stable too:
 - `session`: `task`, `operative_phase`, `suggested_loadout`, `doc_loadout`, `file_targets`, `continuity_watch`, `phase_guardrails`, `done_criteria`, `recommended_actions`, `recommended_commands`, `artifact_targets`, `write_performed`, `sync_performed`, `queries_run`, `results`, `recap_sections`, `warnings`, `verification_scope`, `continuity_state`, `finding_counts`, `top_findings`, `recommended_repairs`
 - `context`: `mode`, `queries_run`, `results`, `warnings`, `suggested_loadout`, `recent_artifacts`
 - `recap`: `mode`, `sections`, `queries_run`, `results`, `warnings`
-- `projects`: `count`, `projects`, including per-project `operative_phase`, `next_action`, `assistant_ready`, `last_checkpoint_at`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`
-- `doctor`: `checks`, `workflow_checks`, `assistant_ready`, `ok`, `supported_spec`, `mempalace_version`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`
+- `projects`: `count`, `projects`, including per-project `operative_phase`, `next_action`, `assistant_ready`, `last_checkpoint_at`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`, `recommended_automation_command`, `recommended_schedule_profile`
+- `doctor`: `checks`, `workflow_checks`, `assistant_ready`, `ok`, `supported_spec`, `mempalace_version`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`, `recommended_automation_command`, `recommended_schedule_profile`
 - `verify`: `scope`, `state`, `verified_at`, `finding_counts`, `findings`, `recommended_actions`, `query_packets`, `source_snapshot`, `cache_path`
 - `maintain`: `kind`, `mode`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `source_inputs`, `generated_sections`
 - `bundle`: `bundle`, `verify_mode`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `recap_sections`, `steps`, `recommended_actions`, `recommended_commands`, `write_performed`, `paths_written`, `sync_performed`, `warnings`
 - `routine`: `routine`, `verify_mode`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `recap_sections`, `steps`, `recommended_actions`, `recommended_commands`, `write_performed`, `paths_written`, `sync_performed`, `warnings`
-- `automate`: `target`, `name`, `routine`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `entry_command`, `write_variant_command`, `prompt`, `expected_outputs`, `recommended_actions`, `recommended_commands`, `warnings`
+- `automate` helper mode: `target`, `name`, `routine`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `entry_command`, `write_variant_command`, `prompt`, `expected_outputs`, `recommended_actions`, `recommended_commands`, `warnings`
+- `automate` suggested-create mode adds: `automation_name`, `automation_prompt`, `automation_rrule`, `automation_cwds`, `automation_status`, `schedule_profile`
 
 Visible helper output is also supported on:
 
