@@ -4295,8 +4295,11 @@ def _build_checkpoint_sections(doc_bundle: dict, results: list[dict], phase: str
             keywords=("decision", "carry", "watch", "risk", "guardrail", "thread"),
             max_items=4,
         )
-        + _extract_story_memory_evidence(results, max_items=3)
     )
+    if len(carry_forward) < 4:
+        carry_forward = _unique_lines(
+            carry_forward + _extract_story_memory_evidence(results, max_items=4 - len(carry_forward))
+        )
     return {
         "Session State": session_state,
         "Current Focus": current_focus,
@@ -6591,7 +6594,9 @@ def _extract_story_memory_evidence(results: list[dict], max_items: int = 3) -> l
                 "chat_process",
             }:
                 continue
-            summary = f"{hit.get('room')}: {_preview_text(hit.get('text', ''), max_words=14)}"
+            summary = _story_memory_summary(hit)
+            if not summary:
+                continue
             normalized = _normalize_text(summary)
             if normalized in seen:
                 continue
@@ -6600,6 +6605,38 @@ def _extract_story_memory_evidence(results: list[dict], max_items: int = 3) -> l
             if len(items) >= max_items:
                 return items
     return items
+
+
+def _story_memory_summary(hit: dict) -> str:
+    room = hit.get("room") or "sidecar"
+    text = hit.get("text", "")
+    source_file = hit.get("source_file") or room
+
+    preferred = []
+    for raw_line in text.splitlines():
+        cleaned = _clean_highlight_line(raw_line)
+        if not cleaned or _is_low_signal_artifact_line(cleaned):
+            continue
+        if cleaned.startswith("#"):
+            continue
+        if cleaned.endswith(":"):
+            continue
+        preferred.append(cleaned)
+
+    line = preferred[0] if preferred else _preview_text(text, max_words=14)
+    if not line:
+        return ""
+
+    room_labels = {
+        "checkpoints": "checkpoint",
+        "brainstorms": "handoff",
+        "audits": "audit",
+        "discarded_paths": "discarded path",
+        "chat_process": "chat process",
+    }
+    label = room_labels.get(room, room.replace("_", " "))
+    source_stub = Path(source_file).stem.replace("_", " ")
+    return f"{label} ({source_stub}): {line}"
 
 
 def _extract_rejected_path_evidence(results: list[dict], max_items: int = 5) -> list[str]:

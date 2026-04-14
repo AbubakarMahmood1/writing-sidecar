@@ -13,6 +13,7 @@ from writing_sidecar.mempalace_adapter import SUPPORTED_MEMPALACE_SPEC
 from writing_sidecar.workflow import (
     STATE_FILENAME,
     _collect_carry_forward_gap_findings,
+    _build_checkpoint_sections,
     build_writing_automation,
     build_writing_bundle,
     build_writing_context,
@@ -1243,6 +1244,52 @@ def test_carry_forward_gap_ignores_discarded_rationale_and_audit_progression_noi
     findings = _collect_carry_forward_gap_findings(bundle, "chapter")
 
     assert findings == []
+
+
+def test_checkpoint_sections_do_not_append_raw_sidecar_preview_when_live_carry_forward_is_strong():
+    doc_bundle = {
+        "current_notes": {
+            "sections": {},
+            "highlights": [],
+        },
+        "current_chapter_notes": {
+            "sections": {
+                "Threads Carried Forward": [
+                    "Arthur's sponsorship of Ciri — ACTIVE — He has vouched for her intake and will now have to answer for it",
+                    "Bruce's anomaly investigation — ACTIVE — Timestamp drift archived; passive hooks are in place",
+                    "Barry's timing-slip concern — ACTIVE — He has no proof yet, but he knows something went wrong",
+                    "Atlantis political pressure — ACTIVE — Mera, the physician, guards, and palace channels are now involved",
+                ],
+            },
+            "highlights": [],
+        },
+        "story_so_far": {
+            "sections": {},
+            "highlights": [],
+        },
+    }
+    results = [
+        {
+            "results": [
+                {
+                    "room": "brainstorms",
+                    "source_file": "2026-04-09_chapter-2_atlantis-fallout_handoff.md",
+                    "text": "# Chapter 2 Atlantis Fallout Handoff\n\nArthur and Mera deciding how much institutional protection Ciri gets.",
+                },
+                {
+                    "room": "audits",
+                    "source_file": "2026-04-09_chapter-1_closeout_audit.md",
+                    "text": "# Chapter 1 Closeout Audit\n\nArthur's sponsorship of Ciri is clear and politically costly.",
+                },
+            ]
+        }
+    ]
+
+    sections = _build_checkpoint_sections(doc_bundle, results, "SCRIPTING", [])
+
+    assert len(sections["Carry-Forward Threads"]) == 4
+    assert all("handoff (" not in item.lower() for item in sections["Carry-Forward Threads"])
+    assert all("audit (" not in item.lower() for item in sections["Carry-Forward Threads"])
 
 
 def test_build_writing_context_returns_startup_packet(monkeypatch):
