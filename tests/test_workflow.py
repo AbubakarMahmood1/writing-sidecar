@@ -12,6 +12,7 @@ from chromadb.api.client import SharedSystemClient
 from writing_sidecar.mempalace_adapter import SUPPORTED_MEMPALACE_SPEC
 from writing_sidecar.workflow import (
     STATE_FILENAME,
+    _collect_carry_forward_gap_findings,
     build_writing_automation,
     build_writing_bundle,
     build_writing_context,
@@ -875,6 +876,25 @@ def test_doctor_reports_supported_version_and_writable_paths(monkeypatch, capsys
         cleanup_temp_dir(tmp_path)
 
 
+def test_doctor_auto_resolves_project_name_from_project_dir():
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        _ensure_dir(project_root)
+        scaffold_writing_sidecar(str(vault_root), "Witcher-DC")
+        write_file(project_root / "AGENTS.md", "gateway")
+        write_file(project_root / "_story_bible" / "05_Current_Notes.md", "**Status:** READY FOR SCRIPTING\n")
+        write_file(project_root / "_story_bible" / "05_Current_Chapter_Notes.md", "**Phase:** SCRIPTING\n")
+
+        report = doctor_writing_sidecar(vault_dir=str(project_root))
+
+        assert report["project"] == "Witcher-DC"
+        assert report["project_root"] == str(project_root.resolve())
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
 def test_doctor_marks_unsupported_version(monkeypatch):
     tmp_path = make_temp_dir()
     try:
@@ -1145,6 +1165,84 @@ def test_verify_ignores_ordinary_draft_language_and_filters_low_signal_artifact_
         assert all(".txt" not in line for line in carry_forward["evidence"])
     finally:
         cleanup_temp_dir(tmp_path)
+
+
+def test_carry_forward_gap_ignores_discarded_rationale_and_audit_progression_noise():
+    bundle = {
+        "current_notes": {
+            "path": "C:/vault/Witcher-DC/_story_bible/05_Current_Notes.md",
+            "sections": {"_root": []},
+            "highlights": [
+                "Chapter 2 should open inside Atlantis after intake.",
+                "Arthur and Mera deciding how much institutional protection Ciri gets.",
+            ],
+        },
+        "current_chapter_notes": {
+            "path": "C:/vault/Witcher-DC/_story_bible/05_Current_Chapter_Notes.md",
+            "sections": {"_root": []},
+            "highlights": [
+                "Convert rescue into politics, medicine, and future obligation.",
+                "The guardian remains unnamed from Arthur's POV.",
+                "Arthur's sponsorship of Ciri remains active.",
+            ],
+        },
+        "story_so_far": {},
+        "state_tracker": {},
+        "timeline": {},
+        "latest_checkpoint": {"exists": False},
+        "latest_handoff": {
+            "exists": True,
+            "path": "C:/vault/Witcher-DC/logs/brainstorms/handoff.md",
+            "sections": {
+                "Starting Position": [
+                    "Chapter 2 should open inside Atlantis after intake.",
+                ],
+                "Guardrails For Chapter 2": [
+                    "Keep Atlantis intake fallout as politics, medicine, and consequences.",
+                ],
+            },
+            "highlights": [],
+        },
+        "latest_audit": {
+            "exists": True,
+            "path": "C:/vault/Witcher-DC/logs/audits/audit.md",
+            "sections": {
+                "Audit Progression": [
+                    "76 — FAIL — Atmosphere outrunning activation",
+                ],
+                "Carry-Forward Threads Logged At Closeout": [
+                    "Arthur's sponsorship of Ciri",
+                ],
+                "What The Final Version Does Better": [
+                    "Atlantis intake now turns into medicine, institutional pressure, and obligation instead of looping the same trust test.",
+                ],
+            },
+            "highlights": [],
+        },
+        "latest_discarded": {
+            "exists": True,
+            "path": "C:/vault/Witcher-DC/logs/discarded_paths/discarded.md",
+            "sections": {
+                "Discarded Path 2": [
+                    "Why it was rejected:",
+                    "slowed the shift from rescue into politics and obligation",
+                    "Keep instead:",
+                    "once Arthur passes the first test, move the next conflict toward sponsorship, medicine, and palace pressure",
+                ],
+                "Discarded Path 3": [
+                    "Why it was rejected:",
+                    "sharp readers will catch the knowledge leak",
+                    "Keep instead:",
+                    "use \"the guardian\" or equivalent until Arthur's knowledge changes",
+                ],
+            },
+            "highlights": [],
+        },
+    }
+
+    findings = _collect_carry_forward_gap_findings(bundle, "chapter")
+
+    assert findings == []
 
 
 def test_build_writing_context_returns_startup_packet(monkeypatch):

@@ -128,6 +128,14 @@ Once this package becomes your normal entrypoint, treat `mempalace-fork` as a co
 
 Use `automate` as the default Codex-facing helper layer. Use `automate --mode suggested-create` only when you want a Codex automation suggestion packet; it does not create or edit an automation by itself. Keep `routine` for lower-level workflow packets, `bundle` for transition primitives, and `session` for phase-local work.
 
+Quick chooser:
+
+- `automate`: "tell me the best next move"
+- `routine`: "package one common work routine for me"
+- `bundle`: "show me the raw transition stack"
+- `session`: "give me the packet for the exact phase I am in"
+- `verify`: "check continuity before I trust the next move"
+
 1. `writing-sidecar doctor <vault-or-project> --project <name>` only when setup confidence is low
 2. `writing-sidecar automate <vault-or-project> --project <name> --name recommended`
 3. `writing-sidecar automate <vault-or-project> --project <name> --mode suggested-create --name recommended` when you want recurring Codex help for that project

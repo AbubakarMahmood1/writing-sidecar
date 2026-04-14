@@ -6160,7 +6160,7 @@ def _collect_carry_forward_gap_findings(bundle: dict, scope: str) -> list[dict]:
         payload = bundle.get(key, {})
         if not payload.get("exists"):
             continue
-        artifact_lines.extend(_payload_lines(payload))
+        artifact_lines.extend(_carry_forward_lines_from_artifact(key, payload))
     candidate_lines = []
     for line in _unique_lines(artifact_lines):
         cleaned = _clean_highlight_line(line)
@@ -6188,6 +6188,75 @@ def _collect_carry_forward_gap_findings(bundle: dict, scope: str) -> list[dict]:
             )
         )
     return findings
+
+
+def _carry_forward_lines_from_artifact(key: str, payload: dict) -> list[str]:
+    if key == "latest_checkpoint":
+        return _payload_lines(payload)
+
+    sections = payload.get("sections", {})
+    if not sections:
+        return _payload_lines(payload)
+
+    items = []
+    if key == "latest_handoff":
+        for title, lines in sections.items():
+            title_key = _normalize_heading_key(title)
+            if any(
+                keyword in title_key
+                for keyword in (
+                    "starting position",
+                    "core opening pressures",
+                    "guardrails",
+                    "best immediate scene material",
+                    "carry forward",
+                    "next start point",
+                )
+            ):
+                items.extend(lines)
+        return _unique_lines(items)
+
+    if key == "latest_audit":
+        for title, lines in sections.items():
+            title_key = _normalize_heading_key(title)
+            if any(
+                keyword in title_key
+                for keyword in (
+                    "final result",
+                    "what the final version does better",
+                    "carry forward threads logged at closeout",
+                    "continuity closeout",
+                    "next start point",
+                )
+            ):
+                items.extend(lines)
+        return _unique_lines(items)
+
+    if key == "latest_discarded":
+        for lines in sections.values():
+            items.extend(_discarded_keep_instead_lines(lines))
+        return _unique_lines(items)
+
+    return _payload_lines(payload)
+
+
+def _discarded_keep_instead_lines(lines: Sequence[str]) -> list[str]:
+    items = []
+    capture = False
+    for line in lines:
+        cleaned = _clean_highlight_line(line)
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered == "keep instead:":
+            capture = True
+            continue
+        if cleaned.endswith(":"):
+            capture = False
+            continue
+        if capture:
+            items.append(cleaned)
+    return items
 
 
 def _collect_verify_findings(status: dict, bundle: dict, scope: str, query_packets: list[dict]) -> list[dict]:
@@ -7682,7 +7751,7 @@ def doctor_writing_sidecar(
         )
 
     report = {
-        "project": project,
+        "project": context["project"],
         "project_root": str(project_root),
         "vault_root": str(context["vault_root"]),
         "output_root": str(context["output_root"]),

@@ -39,6 +39,14 @@ If the sidecar disagrees with a live story-bible file, the live doc wins.
 
 ## Practical AI behavior
 
+Quick chooser:
+
+- `automate`: default entrypoint when you want the tool to choose the next move
+- `routine`: one named work routine like `start-work` or `move-to-prose`
+- `bundle`: the raw transition packet when you want the lower-level stack directly
+- `session`: the exact phase-local packet for `braindump`, `scripting`, `staging`, `prose`, `audit`, `debug`, `handoff`, or `closeout`
+- `verify`: continuity check before risky transitions
+
 - start with `writing-sidecar automate --name recommended` when entering a sidecar-enabled project
 - if you want recurring Codex help, run `writing-sidecar automate --mode suggested-create --name recommended`; this emits a suggestion packet only
 - use `writing-sidecar automate --name move-to-prose` before moving into prose
