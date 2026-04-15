@@ -7684,6 +7684,39 @@ def _extract_status_row_fact_candidates(
         )
 
 
+def _is_high_signal_timeline_fact(title_key: str, cleaned: str) -> bool:
+    line_key = _normalize_heading_key(cleaned)
+    if not line_key:
+        return False
+    if not any(
+        keyword in title_key
+        for keyword in (
+            "current",
+            "active",
+            "present",
+            "next",
+            "immediate",
+            "timeline note",
+            "cross reference",
+        )
+    ):
+        return False
+    if re.search(r"\b(day|year|month|week|phase|chapter|timeline|event)\b", line_key):
+        return True
+    return any(
+        token in line_key
+        for token in (
+            "before ",
+            "after ",
+            "during ",
+            "later",
+            "immediately",
+            "same day",
+            "next day",
+        )
+    )
+
+
 def _extract_section_fact_candidates(
     candidates: list[dict],
     *,
@@ -7721,6 +7754,8 @@ def _extract_section_fact_candidates(
                 attribute = "status"
                 value = "active"
             elif source_key == "timeline" or "timeline" in title_key:
+                if not _is_high_signal_timeline_fact(title_key, cleaned):
+                    continue
                 category = "timeline_fact"
                 attribute = "chronology"
                 value = "active"

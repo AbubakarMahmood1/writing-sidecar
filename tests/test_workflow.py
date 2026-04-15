@@ -2005,6 +2005,92 @@ def test_build_writing_session_startup_recommends_followup_and_can_write(monkeyp
         cleanup_temp_dir(tmp_path)
 
 
+def test_verify_fact_preview_ignores_broad_timeline_history_lines(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = default_output_dir(vault_root.resolve(), "Witcher-DC")
+        palace_root = default_palace_dir(vault_root.resolve(), "Witcher-DC")
+
+        _ensure_dir(project_root)
+        scaffold_writing_sidecar(str(vault_root), "Witcher-DC")
+        write_file(project_root / "AGENTS.md", "gateway")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** READY FOR SCRIPTING\n**Next Action:** Build the intake scene beats.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                **Phase:** SCRIPTING
+                **Chapter:** 2
+
+                ## Threads Carried Forward
+
+                | Thread | Status | Notes |
+                |--------|--------|-------|
+                | Arthur sponsorship | ACTIVE | He still owns the intake burden |
+                """
+            ).strip(),
+        )
+        write_file(
+            project_root / "_story_bible" / "06_Timeline.md",
+            textwrap.dedent(
+                """
+                # Timeline
+
+                ## PHASE 4: ATLANTIS INTERLUDE
+
+                - Justice League forced to work with Ciri
+
+                ## EVENT CROSS-REFERENCE
+
+                - Darkseid War — Year 2-3 — Major involvement
+                """
+            ).strip(),
+        )
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Atlantis intake reference")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [],
+            },
+        )
+
+        report = verify_writing_sidecar(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            sync="never",
+            scope="timeline",
+        )
+
+        timeline_subjects = {
+            item.get("subject")
+            for item in report["fact_ops_preview"]
+            if item.get("category") == "timeline_fact"
+        }
+        assert "Justice League forced to work with Ciri" not in timeline_subjects
+        assert "Darkseid War — Year 2-3 — Major involvement" not in timeline_subjects
+        assert timeline_subjects == set()
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
 def test_session_write_persists_fact_snapshot_and_log(monkeypatch):
     tmp_path = make_temp_dir()
     try:
