@@ -4,7 +4,9 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from time import perf_counter
 
+from .health import begin_health_command, end_health_command
 from .mempalace_adapter import MempalaceCompatibilityError, search as raw_search
 from .workflow import (
     AUTOMATE_NAMES,
@@ -20,6 +22,7 @@ from .workflow import (
     SEARCH_MODE_ROOMS,
     SESSION_TASKS,
     VERIFY_SCOPES,
+    _record_health_for_status,
     _ensure_dir,
     _project_wing,
     _sidecar_runtime_environment,
@@ -238,45 +241,83 @@ def cmd_status(args):
 
 
 def cmd_export(args):
-    summary = export_writing_corpus(
-        vault_dir=args.dir,
-        project=args.project,
-        out_dir=args.out,
-        codex_home=args.codex_home,
-        config_path=args.config,
-        brainstorm_paths=args.brainstorms,
-        audit_paths=args.audits,
-        discarded_paths=args.discarded_paths,
-        mine_after_export=args.mine,
-        palace_path=args.sidecar_palace,
-        runtime_root=args.runtime_root,
-        refresh_palace=args.refresh_palace,
-        dry_run=args.dry_run,
-    )
+    started_at = perf_counter()
+    health_token, should_record_health = begin_health_command()
+    try:
+        summary = export_writing_corpus(
+            vault_dir=args.dir,
+            project=args.project,
+            out_dir=args.out,
+            codex_home=args.codex_home,
+            config_path=args.config,
+            brainstorm_paths=args.brainstorms,
+            audit_paths=args.audits,
+            discarded_paths=args.discarded_paths,
+            mine_after_export=args.mine,
+            palace_path=args.sidecar_palace,
+            runtime_root=args.runtime_root,
+            refresh_palace=args.refresh_palace,
+            dry_run=args.dry_run,
+        )
+    finally:
+        end_health_command(health_token)
+    if should_record_health:
+        status = get_writing_sidecar_status(
+            vault_dir=args.dir,
+            project=args.project,
+            out_dir=args.out,
+            codex_home=args.codex_home,
+            config_path=args.config,
+            brainstorm_paths=args.brainstorms,
+            audit_paths=args.audits,
+            discarded_paths=args.discarded_paths,
+            palace_path=args.sidecar_palace,
+            runtime_root=args.runtime_root,
+        )
+        _record_health_for_status(
+            status,
+            command="export",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=not args.dry_run,
+            write_performed=not args.dry_run,
+        )
     print_export_summary(summary, dry_run=args.dry_run)
 
 
 def cmd_search(args):
-    prepared = _prepare_from_args(args)
-    status = prepared["status"]
-    palace_path = Path(status["palace_path"])
-    if not palace_path.exists():
-        print(f"\n  No palace found at {palace_path}")
-        print("  Run writing-sidecar sync or use --sync always/if-needed to build it first.")
-        raise SystemExit(1)
+    started_at = perf_counter()
+    health_token, should_record_health = begin_health_command()
+    try:
+        prepared = _prepare_from_args(args)
+        status = prepared["status"]
+        palace_path = Path(status["palace_path"])
+        if not palace_path.exists():
+            print(f"\n  No palace found at {palace_path}")
+            print("  Run writing-sidecar sync or use --sync always/if-needed to build it first.")
+            raise SystemExit(1)
 
-    with _sidecar_runtime_environment(Path(status["runtime_root"])):
-        results = search_writing_sidecar(
-            query=args.query,
-            palace_path=str(palace_path),
-            wing=_project_wing(status["project"]),
-            mode=args.mode,
-            n_results=args.results,
+        with _sidecar_runtime_environment(Path(status["runtime_root"])):
+            results = search_writing_sidecar(
+                query=args.query,
+                palace_path=str(palace_path),
+                wing=_project_wing(status["project"]),
+                mode=args.mode,
+                n_results=args.results,
+            )
+
+        if results.get("error"):
+            print(f"\n  Search error: {results['error']}")
+            raise SystemExit(1)
+    finally:
+        end_health_command(health_token)
+    if should_record_health:
+        _record_health_for_status(
+            status,
+            command="search",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=prepared["synced"],
+            write_performed=False,
         )
-
-    if results.get("error"):
-        print(f"\n  Search error: {results['error']}")
-        raise SystemExit(1)
 
     if args.format == "json":
         _emit_json(
@@ -295,38 +336,67 @@ def cmd_search(args):
 
 
 def cmd_sync(args):
-    prepared = _prepare_from_args(args)
-    status = prepared["status"]
-    _print_prepare_feedback(prepared, show_status=not args.query)
-    if not args.query:
-        return
+    started_at = perf_counter()
+    health_token, should_record_health = begin_health_command()
+    try:
+        prepared = _prepare_from_args(args)
+        status = prepared["status"]
+        _print_prepare_feedback(prepared, show_status=not args.query)
+        if not args.query:
+            if should_record_health:
+                _record_health_for_status(
+                    status,
+                    command="sync",
+                    duration_ms=round((perf_counter() - started_at) * 1000),
+                    sync_performed=prepared["synced"],
+                    write_performed=prepared["synced"],
+                )
+            return
 
-    palace_path = Path(status["palace_path"])
-    if not palace_path.exists():
-        print(f"\n  No palace found at {palace_path}")
-        print("  Run writing-sidecar sync without --sync never, or use --sync always.")
-        raise SystemExit(1)
+        palace_path = Path(status["palace_path"])
+        if not palace_path.exists():
+            print(f"\n  No palace found at {palace_path}")
+            print("  Run writing-sidecar sync without --sync never, or use --sync always.")
+            raise SystemExit(1)
 
-    with _sidecar_runtime_environment(Path(status["runtime_root"])):
-        if args.mode:
-            results = search_writing_sidecar(
+        with _sidecar_runtime_environment(Path(status["runtime_root"])):
+            if args.mode:
+                results = search_writing_sidecar(
+                    query=args.query,
+                    palace_path=str(palace_path),
+                    wing=_project_wing(status["project"]),
+                    mode=args.mode,
+                    n_results=args.results,
+                )
+                if results.get("error"):
+                    print(f"\n  Search error: {results['error']}")
+                    raise SystemExit(1)
+                if should_record_health:
+                    _record_health_for_status(
+                        status,
+                        command="sync",
+                        duration_ms=round((perf_counter() - started_at) * 1000),
+                        sync_performed=prepared["synced"],
+                        write_performed=prepared["synced"],
+                    )
+                print_writing_search_results(results)
+                return
+            raw_search(
                 query=args.query,
                 palace_path=str(palace_path),
                 wing=_project_wing(status["project"]),
-                mode=args.mode,
+                room=args.room,
                 n_results=args.results,
             )
-            if results.get("error"):
-                print(f"\n  Search error: {results['error']}")
-                raise SystemExit(1)
-            print_writing_search_results(results)
-            return
-        raw_search(
-            query=args.query,
-            palace_path=str(palace_path),
-            wing=_project_wing(status["project"]),
-            room=args.room,
-            n_results=args.results,
+    finally:
+        end_health_command(health_token)
+    if should_record_health:
+        _record_health_for_status(
+            status,
+            command="sync",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=prepared["synced"],
+            write_performed=prepared["synced"],
         )
 
 

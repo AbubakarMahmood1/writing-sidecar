@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from writing_sidecar.health import HEALTH_HISTORY_FILENAME, HEALTH_LATEST_FILENAME
 from writing_sidecar.workflow import (
     build_writing_session,
     doctor_writing_sidecar,
@@ -24,6 +25,9 @@ def test_live_vault_preview_commands_preserve_canon_docs(live_vault_root):
 
     current_notes_path = project_root / "_story_bible" / "05_Current_Notes.md"
     current_chapter_notes_path = project_root / "_story_bible" / "05_Current_Chapter_Notes.md"
+    health_root = live_vault_root / ".sidecars" / "witcher_dc" / "health"
+    latest_health_path = health_root / HEALTH_LATEST_FILENAME
+    history_health_path = health_root / HEALTH_HISTORY_FILENAME
     before_current_notes = current_notes_path.read_text(encoding="utf-8")
     before_current_chapter_notes = current_chapter_notes_path.read_text(encoding="utf-8")
 
@@ -47,5 +51,7 @@ def test_live_vault_preview_commands_preserve_canon_docs(live_vault_root):
     assert verify["project"] == "Witcher-DC"
     assert session["project"] == "Witcher-DC"
     assert session["write_performed"] is False
+    assert latest_health_path.exists()
+    assert history_health_path.exists()
     assert current_notes_path.read_text(encoding="utf-8") == before_current_notes
     assert current_chapter_notes_path.read_text(encoding="utf-8") == before_current_chapter_notes

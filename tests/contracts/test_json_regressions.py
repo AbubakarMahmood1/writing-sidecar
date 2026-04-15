@@ -52,6 +52,14 @@ def test_witcher_fixture_contracts_and_snapshots(witcher_fixture):
         "recommended_schedule_profile",
         "fact_layer_ready",
         "last_fact_sync_at",
+        "health_state",
+        "backend_review_due",
+        "recommended_backend_action",
+        "health_reasons",
+        "last_health_check_at",
+        "health_sample_count",
+        "health_summary_path",
+        "health_metrics",
     }.issubset(doctor)
     assert doctor["recommended_entrypoint"] == "writing-sidecar automate"
 
@@ -71,6 +79,12 @@ def test_witcher_fixture_contracts_and_snapshots(witcher_fixture):
         "recommended_schedule_profile",
         "fact_layer_ready",
         "last_fact_sync_at",
+        "health_state",
+        "backend_review_due",
+        "recommended_backend_action",
+        "health_reasons",
+        "last_health_check_at",
+        "health_sample_count",
     }.issubset(project)
 
     verify = outputs["verify_chapter"]
@@ -192,6 +206,12 @@ def test_template_fixture_contracts_and_snapshots(template_fixture):
         "recommended_schedule_profile",
         "fact_layer_ready",
         "last_fact_sync_at",
+        "health_state",
+        "backend_review_due",
+        "recommended_backend_action",
+        "health_reasons",
+        "last_health_check_at",
+        "health_sample_count",
         "ok",
     }.issubset(doctor)
     assert doctor["assistant_ready"] is False
@@ -211,6 +231,12 @@ def test_template_fixture_contracts_and_snapshots(template_fixture):
         "recommended_schedule_profile",
         "fact_layer_ready",
         "last_fact_sync_at",
+        "health_state",
+        "backend_review_due",
+        "recommended_backend_action",
+        "health_reasons",
+        "last_health_check_at",
+        "health_sample_count",
     }.issubset(project)
     assert project["state"] == "not_built"
 

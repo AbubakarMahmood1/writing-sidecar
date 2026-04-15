@@ -28,6 +28,12 @@
       "verification_stale": true,
       "fact_layer_ready": false,
       "last_fact_sync_at": null,
+      "health_state": "unknown",
+      "backend_review_due": false,
+      "recommended_backend_action": "keep_current_backend",
+      "health_reasons": [],
+      "last_health_check_at": null,
+      "health_sample_count": 0,
       "room_counts": {},
       "reasons": [
         {

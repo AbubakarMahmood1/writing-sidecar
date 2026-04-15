@@ -30,6 +30,7 @@ TIMESTAMP_KEYS = {
     "last_verified_at",
     "last_fact_sync_at",
     "last_checkpoint_at",
+    "last_health_check_at",
 }
 TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})")
 SHA256_PATTERN = re.compile(r"\b[a-fA-F0-9]{64}\b")

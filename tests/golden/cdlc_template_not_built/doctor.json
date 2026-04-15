@@ -135,5 +135,32 @@
   "verification_stale": true,
   "fact_layer_ready": false,
   "last_fact_sync_at": null,
+  "health_state": "unknown",
+  "backend_review_due": false,
+  "recommended_backend_action": "keep_current_backend",
+  "health_reasons": [],
+  "last_health_check_at": null,
+  "health_sample_count": 0,
+  "health_summary_path": "<OUTPUT_ROOT>\\health\\latest.json",
+  "health_metrics": {
+    "window_size": 0,
+    "tracked_input_count": 0,
+    "room_total": 0,
+    "room_counts": {},
+    "latest_fact_preview_op_count": 0,
+    "latest_fact_conflict_count": 0,
+    "command_families": {
+      "sync": {
+        "sample_count": 0,
+        "median_ms": null,
+        "p95_ms": null
+      },
+      "query": {
+        "sample_count": 0,
+        "median_ms": null,
+        "p95_ms": null
+      }
+    }
+  },
   "ok": false
 }

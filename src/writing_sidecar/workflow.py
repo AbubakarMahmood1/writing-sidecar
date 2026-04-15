@@ -19,10 +19,20 @@ import hashlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Iterable, Sequence
 
 import yaml
 
+from .health import (
+    begin_health_command,
+    command_family as health_command_family,
+    describe_health_reason,
+    end_health_command,
+    health_command_scope,
+    load_health_summary,
+    record_health_event,
+)
 from .mempalace_adapter import (
     SUPPORTED_MEMPALACE_SPEC,
     ensure_supported_mempalace_version,
@@ -1401,6 +1411,12 @@ def list_writing_projects(vault_dir: str) -> dict:
         workflow_checks = _collect_workflow_checks(Path(status["project_root"]))
         verification = _cached_verification_summary(Path(status["output_root"]))
         fact_summary = _cached_fact_layer_summary(Path(status["output_root"]))
+        health_summary = _cached_health_summary(
+            Path(status["output_root"]),
+            project=status["project"],
+            project_root=status["project_root"],
+            vault_root=status["vault_root"],
+        )
         recommendations = _workflow_recommendations(
             project_root=status["project_root"],
             state=status["state"],
@@ -1435,6 +1451,12 @@ def list_writing_projects(vault_dir: str) -> dict:
                 "verification_stale": verification["verification_stale"],
                 "fact_layer_ready": fact_summary["fact_layer_ready"],
                 "last_fact_sync_at": fact_summary["last_fact_sync_at"],
+                "health_state": health_summary["health_state"],
+                "backend_review_due": health_summary["backend_review_due"],
+                "recommended_backend_action": health_summary["recommended_backend_action"],
+                "health_reasons": list(health_summary.get("health_reasons", [])),
+                "last_health_check_at": health_summary["last_health_check_at"],
+                "health_sample_count": health_summary["health_sample_count"],
                 "room_counts": status.get("room_counts", {}),
                 "reasons": status.get("stale_reasons", []),
             }
@@ -1490,6 +1512,12 @@ def print_writing_projects(report: dict):
         if item.get("last_fact_sync_at"):
             print(f"    Facts:  {item['last_fact_sync_at']}")
         print(f"    Facts ready: {'YES' if item.get('fact_layer_ready') else 'NO'}")
+        print(f"    Health: {str(item.get('health_state', 'unknown')).upper()}")
+        print(f"    Backend: {item.get('recommended_backend_action', 'keep_current_backend')}")
+        if item.get("last_health_check_at"):
+            print(f"    Health check: {item['last_health_check_at']}")
+        for reason in item.get("health_reasons", []):
+            print(f"      - {describe_health_reason(reason)}")
         if item.get("reasons"):
             print("    Reasons:")
             for reason in item["reasons"]:
@@ -1622,22 +1650,31 @@ def build_writing_context(
 ) -> dict:
     if mode not in CONTEXT_MODES:
         raise ValueError(f"Unknown writing context mode: {mode}")
-
-    prepared = prepare_writing_sidecar(
-        vault_dir=vault_dir,
-        project=project,
-        out_dir=out_dir,
-        codex_home=codex_home,
-        config_path=config_path,
-        brainstorm_paths=brainstorm_paths,
-        audit_paths=audit_paths,
-        discarded_paths=discarded_paths,
-        palace_path=palace_path,
-        runtime_root=runtime_root,
-        sync=sync,
-        refresh_palace=refresh_palace,
-    )
-    _, context_data = _build_context_payload(prepared, mode, n_results)
+    started_at = perf_counter()
+    with health_command_scope() as should_record_health:
+        prepared = prepare_writing_sidecar(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            sync=sync,
+            refresh_palace=refresh_palace,
+        )
+        _, context_data = _build_context_payload(prepared, mode, n_results)
+    if should_record_health:
+        _record_health_for_status(
+            prepared["status"],
+            command="context",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=context_data.get("synced", False),
+            write_performed=False,
+        )
     return context_data
 
 
@@ -1725,22 +1762,31 @@ def build_writing_recap(
 ) -> dict:
     if mode not in RECAP_MODES:
         raise ValueError(f"Unknown writing recap mode: {mode}")
-
-    prepared = prepare_writing_sidecar(
-        vault_dir=vault_dir,
-        project=project,
-        out_dir=out_dir,
-        codex_home=codex_home,
-        config_path=config_path,
-        brainstorm_paths=brainstorm_paths,
-        audit_paths=audit_paths,
-        discarded_paths=discarded_paths,
-        palace_path=palace_path,
-        runtime_root=runtime_root,
-        sync=sync,
-        refresh_palace=refresh_palace,
-    )
-    _, recap_data = _build_recap_payload(prepared, mode, n_results)
+    started_at = perf_counter()
+    with health_command_scope() as should_record_health:
+        prepared = prepare_writing_sidecar(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            sync=sync,
+            refresh_palace=refresh_palace,
+        )
+        _, recap_data = _build_recap_payload(prepared, mode, n_results)
+    if should_record_health:
+        _record_health_for_status(
+            prepared["status"],
+            command="recap",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=recap_data.get("synced", False),
+            write_performed=False,
+        )
     return recap_data
 
 
@@ -1815,92 +1861,9 @@ def build_writing_session(
 ) -> dict:
     if task not in SESSION_TASKS:
         raise ValueError(f"Unknown writing session task: {task}")
-
-    prepared = prepare_writing_sidecar(
-        vault_dir=vault_dir,
-        project=project,
-        out_dir=out_dir,
-        codex_home=codex_home,
-        config_path=config_path,
-        brainstorm_paths=brainstorm_paths,
-        audit_paths=audit_paths,
-        discarded_paths=discarded_paths,
-        palace_path=palace_path,
-        runtime_root=runtime_root,
-        sync=sync,
-        refresh_palace=refresh_palace,
-    )
-    status = prepared["status"]
-    project_root = status["project_root"]
-    doc_bundle = _load_live_doc_bundle(Path(project_root))
-    raw_phase = _extract_phase(doc_bundle)
-    operative_phase = _derive_operative_phase(doc_bundle, raw_phase)
-
-    recap_sections: dict[str, list[str]] = {}
-
-    if task == "startup":
-        _, base = _build_context_payload(prepared, task, n_results, doc_bundle=doc_bundle)
-    elif task in {"handoff", "closeout"}:
-        _, recap = _build_recap_payload(prepared, "handoff", n_results, doc_bundle=doc_bundle)
-        base = {
-            "project": recap["project"],
-            "project_root": recap["project_root"],
-            "vault_root": recap["vault_root"],
-            "mode": task,
-            "synced": recap["synced"],
-            "sync_summary": recap["sync_summary"],
-            "state": recap["state"],
-            "stale": recap["stale"],
-            "reasons": recap["reasons"],
-            "last_synced_at": recap["last_synced_at"],
-            "phase": recap["phase"],
-            "current_chapter": recap["current_chapter"],
-            "current_arc": recap["current_arc"],
-            "suggested_loadout": _derive_session_loadout(doc_bundle, recap["phase"], task),
-            "queries_run": recap["queries_run"],
-            "results": recap["results"],
-            "warnings": recap["warnings"],
-            "recent_artifacts": _collect_recent_artifacts(Path(status["output_root"])),
-            "doc_highlights": _doc_highlights_payload(doc_bundle),
-            "recap_sections": recap["sections"],
-            "source_priority": recap["source_priority"],
-        }
-    else:
-        query_plan = _select_session_queries(doc_bundle, status["project"], task)
-        _, base = _build_context_payload(
-            prepared,
-            task,
-            n_results,
-            query_plan=query_plan,
-            doc_bundle=doc_bundle,
-        )
-        if task == "prose":
-            recap_sections = _build_prose_session_sections(doc_bundle, base["results"])
-            base["recap_sections"] = recap_sections
-
-    base["phase"] = raw_phase
-    base["operative_phase"] = operative_phase
-    base["suggested_loadout"] = _derive_session_loadout(doc_bundle, raw_phase, task, operative_phase)
-    if task not in {"handoff", "closeout"}:
-        base.setdefault("recap_sections", recap_sections)
-    verification_scope = _verification_scope_for_task(task)
-    if verification_report is not None:
-        verification = verification_report
-    elif run_verification:
-        verification = _build_verification_report(
-            prepared,
-            scope=verification_scope,
-            n_results=n_results,
-            doc_bundle=doc_bundle,
-            write_cache=False,
-        )
-    else:
-        verification = _empty_verification_report(prepared, verification_scope)
-
-    write_reports = []
-    if write:
-        write_reports = _perform_session_writes(
-            task=task,
+    started_at = perf_counter()
+    with health_command_scope() as should_record_health:
+        prepared = prepare_writing_sidecar(
             vault_dir=vault_dir,
             project=project,
             out_dir=out_dir,
@@ -1912,122 +1875,216 @@ def build_writing_session(
             palace_path=palace_path,
             runtime_root=runtime_root,
             sync=sync,
-            notes=notes,
-            results=base["results"],
+            refresh_palace=refresh_palace,
         )
+        status = prepared["status"]
+        project_root = status["project_root"]
+        doc_bundle = _load_live_doc_bundle(Path(project_root))
+        raw_phase = _extract_phase(doc_bundle)
+        operative_phase = _derive_operative_phase(doc_bundle, raw_phase)
 
-    final_status = base
-    if write_reports:
-        final_report = write_reports[-1]
-        final_status = {
-            **base,
-            "state": final_report["state"],
-            "stale": final_report["stale"],
-            "reasons": final_report["reasons"],
-            "last_synced_at": final_report["last_synced_at"],
-            "warnings": _unique_lines(base["warnings"] + final_report["warnings"]),
+        recap_sections: dict[str, list[str]] = {}
+
+        if task == "startup":
+            _, base = _build_context_payload(prepared, task, n_results, doc_bundle=doc_bundle)
+        elif task in {"handoff", "closeout"}:
+            _, recap = _build_recap_payload(prepared, "handoff", n_results, doc_bundle=doc_bundle)
+            base = {
+                "project": recap["project"],
+                "project_root": recap["project_root"],
+                "vault_root": recap["vault_root"],
+                "mode": task,
+                "synced": recap["synced"],
+                "sync_summary": recap["sync_summary"],
+                "state": recap["state"],
+                "stale": recap["stale"],
+                "reasons": recap["reasons"],
+                "last_synced_at": recap["last_synced_at"],
+                "phase": recap["phase"],
+                "current_chapter": recap["current_chapter"],
+                "current_arc": recap["current_arc"],
+                "suggested_loadout": _derive_session_loadout(doc_bundle, recap["phase"], task),
+                "queries_run": recap["queries_run"],
+                "results": recap["results"],
+                "warnings": recap["warnings"],
+                "recent_artifacts": _collect_recent_artifacts(Path(status["output_root"])),
+                "doc_highlights": _doc_highlights_payload(doc_bundle),
+                "recap_sections": recap["sections"],
+                "source_priority": recap["source_priority"],
+            }
+        else:
+            query_plan = _select_session_queries(doc_bundle, status["project"], task)
+            _, base = _build_context_payload(
+                prepared,
+                task,
+                n_results,
+                query_plan=query_plan,
+                doc_bundle=doc_bundle,
+            )
+            if task == "prose":
+                recap_sections = _build_prose_session_sections(doc_bundle, base["results"])
+                base["recap_sections"] = recap_sections
+
+        base["phase"] = raw_phase
+        base["operative_phase"] = operative_phase
+        base["suggested_loadout"] = _derive_session_loadout(doc_bundle, raw_phase, task, operative_phase)
+        if task not in {"handoff", "closeout"}:
+            base.setdefault("recap_sections", recap_sections)
+        verification_scope = _verification_scope_for_task(task)
+        if verification_report is not None:
+            verification = verification_report
+        elif run_verification:
+            verification = _build_verification_report(
+                prepared,
+                scope=verification_scope,
+                n_results=n_results,
+                doc_bundle=doc_bundle,
+                write_cache=False,
+            )
+        else:
+            verification = _empty_verification_report(prepared, verification_scope)
+
+        write_reports = []
+        if write:
+            write_reports = _perform_session_writes(
+                task=task,
+                vault_dir=vault_dir,
+                project=project,
+                out_dir=out_dir,
+                codex_home=codex_home,
+                config_path=config_path,
+                brainstorm_paths=brainstorm_paths,
+                audit_paths=audit_paths,
+                discarded_paths=discarded_paths,
+                palace_path=palace_path,
+                runtime_root=runtime_root,
+                sync=sync,
+                notes=notes,
+                results=base["results"],
+            )
+
+        final_status = base
+        if write_reports:
+            final_report = write_reports[-1]
+            final_status = {
+                **base,
+                "state": final_report["state"],
+                "stale": final_report["stale"],
+                "reasons": final_report["reasons"],
+                "last_synced_at": final_report["last_synced_at"],
+                "warnings": _unique_lines(base["warnings"] + final_report["warnings"]),
+            }
+        else:
+            final_status = {**base, "warnings": _unique_lines(base["warnings"])}
+
+        project_root_path = Path(project_root)
+        output_root = Path(status["output_root"])
+        doc_loadout = list(final_status.get("suggested_loadout", []))
+        final_status["task"] = task
+        final_status["doc_loadout"] = doc_loadout
+        final_status["file_targets"] = _resolve_session_file_targets(project_root_path, doc_bundle, doc_loadout)
+        final_status["continuity_watch"] = _build_session_continuity_watch(doc_bundle, final_status.get("results", []), task)
+        final_status["phase_guardrails"] = _session_phase_guardrails(task, operative_phase)
+        final_status["done_criteria"] = _session_done_criteria(task, operative_phase)
+        final_status["artifact_targets"] = _predict_session_artifact_targets(
+            task=task,
+            status=status,
+            doc_bundle=doc_bundle,
+            notes=notes or [],
+            results=final_status.get("results", []),
+        )
+        final_status["recommended_commands"] = _build_session_recommended_commands(
+            task=task,
+            project_root=project_root_path,
+            operative_phase=operative_phase,
+            write=write,
+            notes=notes or [],
+            results=final_status.get("results", []),
+        )
+        final_status["recommended_actions"] = _build_session_recommended_actions(
+            task=task,
+            project_root=project_root_path,
+            doc_bundle=doc_bundle,
+            operative_phase=operative_phase,
+            phase=final_status["phase"],
+            suggested_loadout=doc_loadout,
+            results=final_status.get("results", []),
+            write=write,
+            notes=notes or [],
+        )
+        final_status["write_performed"] = bool(write_reports)
+        final_status["paths_written"] = [
+            path for report in write_reports for path in report.get("paths_written", [])
+        ]
+        final_status["sync_performed"] = bool(prepared["synced"] or any(report.get("sync_performed") for report in write_reports))
+        final_status["sync_summary"] = next(
+            (report.get("sync_summary") for report in reversed(write_reports) if report.get("sync_summary")),
+            base.get("sync_summary"),
+        )
+        final_status["generated_sections"] = {
+            key: value
+            for report in write_reports
+            for key, value in report.get("generated_sections", {}).items()
         }
-    else:
-        final_status = {**base, "warnings": _unique_lines(base["warnings"])}
+        final_status["source_inputs"] = [
+            item
+            for report in write_reports
+            for item in report.get("source_inputs", [])
+        ]
+        final_status["recent_artifacts"] = _collect_recent_artifacts(output_root)
+        final_status["doc_highlights"] = _doc_highlights_payload(doc_bundle)
+        final_status["source_priority"] = ["live_docs", "sidecar"]
+        final_status["verification_scope"] = verification_scope
+        final_status["continuity_state"] = verification["state"]
+        final_status["finding_counts"] = verification["finding_counts"]
+        final_status["top_findings"] = verification["findings"][:3]
+        final_status["recommended_repairs"] = verification["recommended_actions"][:5]
+        latest_fact_report = next(
+            (
+                report
+                for report in reversed(write_reports)
+                if report.get("fact_layer_state")
+            ),
+            None,
+        )
+        fact_source = latest_fact_report or verification
+        final_status["fact_layer_state"] = fact_source.get("fact_layer_state", "missing")
+        final_status["fact_counts"] = fact_source.get(
+            "fact_counts",
+            {
+                "active": 0,
+                "retired": 0,
+                "add": 0,
+                "update": 0,
+                "delete": 0,
+                "none": 0,
+                "conflicts": 0,
+            },
+        )
+        final_status["fact_ops_preview"] = list(fact_source.get("fact_ops_preview", []))
+        final_status["fact_conflicts"] = list(fact_source.get("fact_conflicts", []))
+        final_status["fact_highlights"] = list(fact_source.get("fact_highlights", []))
+        final_status["last_fact_sync_at"] = fact_source.get("last_fact_sync_at")
+        final_status["fact_layer_ready"] = bool(fact_source.get("fact_layer_ready"))
+        final_status["fact_write_performed"] = bool(
+            latest_fact_report and latest_fact_report.get("fact_write_performed")
+        )
+        final_status["fact_paths_written"] = [
+            path for report in write_reports for path in report.get("fact_paths_written", [])
+        ]
+        final_status["warnings"] = _unique_lines(final_status["warnings"] + verification.get("warnings", []))
+        final_status["warnings"] = _unique_lines(final_status["warnings"] + list((fact_source or {}).get("warnings", [])))
 
-    project_root_path = Path(project_root)
-    output_root = Path(status["output_root"])
-    doc_loadout = list(final_status.get("suggested_loadout", []))
-    final_status["task"] = task
-    final_status["doc_loadout"] = doc_loadout
-    final_status["file_targets"] = _resolve_session_file_targets(project_root_path, doc_bundle, doc_loadout)
-    final_status["continuity_watch"] = _build_session_continuity_watch(doc_bundle, final_status.get("results", []), task)
-    final_status["phase_guardrails"] = _session_phase_guardrails(task, operative_phase)
-    final_status["done_criteria"] = _session_done_criteria(task, operative_phase)
-    final_status["artifact_targets"] = _predict_session_artifact_targets(
-        task=task,
-        status=status,
-        doc_bundle=doc_bundle,
-        notes=notes or [],
-        results=final_status.get("results", []),
-    )
-    final_status["recommended_commands"] = _build_session_recommended_commands(
-        task=task,
-        project_root=project_root_path,
-        operative_phase=operative_phase,
-        write=write,
-        notes=notes or [],
-        results=final_status.get("results", []),
-    )
-    final_status["recommended_actions"] = _build_session_recommended_actions(
-        task=task,
-        project_root=project_root_path,
-        doc_bundle=doc_bundle,
-        operative_phase=operative_phase,
-        phase=final_status["phase"],
-        suggested_loadout=doc_loadout,
-        results=final_status.get("results", []),
-        write=write,
-        notes=notes or [],
-    )
-    final_status["write_performed"] = bool(write_reports)
-    final_status["paths_written"] = [
-        path for report in write_reports for path in report.get("paths_written", [])
-    ]
-    final_status["sync_performed"] = bool(prepared["synced"] or any(report.get("sync_performed") for report in write_reports))
-    final_status["sync_summary"] = next(
-        (report.get("sync_summary") for report in reversed(write_reports) if report.get("sync_summary")),
-        base.get("sync_summary"),
-    )
-    final_status["generated_sections"] = {
-        key: value
-        for report in write_reports
-        for key, value in report.get("generated_sections", {}).items()
-    }
-    final_status["source_inputs"] = [
-        item
-        for report in write_reports
-        for item in report.get("source_inputs", [])
-    ]
-    final_status["recent_artifacts"] = _collect_recent_artifacts(output_root)
-    final_status["doc_highlights"] = _doc_highlights_payload(doc_bundle)
-    final_status["source_priority"] = ["live_docs", "sidecar"]
-    final_status["verification_scope"] = verification_scope
-    final_status["continuity_state"] = verification["state"]
-    final_status["finding_counts"] = verification["finding_counts"]
-    final_status["top_findings"] = verification["findings"][:3]
-    final_status["recommended_repairs"] = verification["recommended_actions"][:5]
-    latest_fact_report = next(
-        (
-            report
-            for report in reversed(write_reports)
-            if report.get("fact_layer_state")
-        ),
-        None,
-    )
-    fact_source = latest_fact_report or verification
-    final_status["fact_layer_state"] = fact_source.get("fact_layer_state", "missing")
-    final_status["fact_counts"] = fact_source.get(
-        "fact_counts",
-        {
-            "active": 0,
-            "retired": 0,
-            "add": 0,
-            "update": 0,
-            "delete": 0,
-            "none": 0,
-            "conflicts": 0,
-        },
-    )
-    final_status["fact_ops_preview"] = list(fact_source.get("fact_ops_preview", []))
-    final_status["fact_conflicts"] = list(fact_source.get("fact_conflicts", []))
-    final_status["fact_highlights"] = list(fact_source.get("fact_highlights", []))
-    final_status["last_fact_sync_at"] = fact_source.get("last_fact_sync_at")
-    final_status["fact_layer_ready"] = bool(fact_source.get("fact_layer_ready"))
-    final_status["fact_write_performed"] = bool(
-        latest_fact_report and latest_fact_report.get("fact_write_performed")
-    )
-    final_status["fact_paths_written"] = [
-        path for report in write_reports for path in report.get("fact_paths_written", [])
-    ]
-    final_status["warnings"] = _unique_lines(final_status["warnings"] + verification.get("warnings", []))
-    final_status["warnings"] = _unique_lines(final_status["warnings"] + list((fact_source or {}).get("warnings", [])))
-
+    if should_record_health:
+        _record_health_for_status(
+            prepared["status"],
+            command="session",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=final_status.get("sync_performed", False),
+            write_performed=final_status.get("write_performed", False),
+            continuity_state=final_status.get("continuity_state"),
+            fact_layer_state=final_status.get("fact_layer_state"),
+        )
     return final_status
 
 
@@ -2523,18 +2580,49 @@ def build_writing_bundle(
         raise ValueError(f"Unknown writing bundle: {name}")
     if verify_mode not in BUNDLE_VERIFY_MODES:
         raise ValueError(f"Unknown writing bundle verify mode: {verify_mode}")
+    started_at = perf_counter()
+    health_token, should_record_health = begin_health_command()
+    try:
+        scope = BUNDLE_VERIFY_SCOPES[name]
+        main_task = _bundle_main_task(name)
+        secondary_task = _bundle_secondary_task(name)
+        recap_mode = _bundle_recap_mode(name)
+        cleaned_notes = _clean_note_list(notes or [])
+        steps: list[dict] = []
+        initial_sync = sync
+        verification_report: dict | None = None
 
-    scope = BUNDLE_VERIFY_SCOPES[name]
-    main_task = _bundle_main_task(name)
-    secondary_task = _bundle_secondary_task(name)
-    recap_mode = _bundle_recap_mode(name)
-    cleaned_notes = _clean_note_list(notes or [])
-    steps: list[dict] = []
-    initial_sync = sync
-    verification_report: dict | None = None
+        if verify_mode != "skip":
+            verification_report = verify_writing_sidecar(
+                vault_dir=vault_dir,
+                project=project,
+                out_dir=out_dir,
+                codex_home=codex_home,
+                config_path=config_path,
+                brainstorm_paths=brainstorm_paths,
+                audit_paths=audit_paths,
+                discarded_paths=discarded_paths,
+                palace_path=palace_path,
+                runtime_root=runtime_root,
+                sync=sync,
+                refresh_palace=refresh_palace,
+                scope=scope,
+                n_results=n_results,
+            )
+            steps.append(
+                _bundle_step(
+                    name=f"verify-{scope}",
+                    kind="verify",
+                    command=_verify_command(vault_dir, project, scope),
+                    status="completed",
+                    write_capable=False,
+                    write_requested=False,
+                    summary=_verification_step_summary(verification_report),
+                )
+            )
+            initial_sync = "never"
 
-    if verify_mode != "skip":
-        verification_report = verify_writing_sidecar(
+        primary_packet = build_writing_session(
             vault_dir=vault_dir,
             project=project,
             out_dir=out_dir,
@@ -2545,263 +2633,259 @@ def build_writing_bundle(
             discarded_paths=discarded_paths,
             palace_path=palace_path,
             runtime_root=runtime_root,
-            sync=sync,
-            refresh_palace=refresh_palace,
-            scope=scope,
-            n_results=n_results,
-        )
-        steps.append(
-            _bundle_step(
-                name=f"verify-{scope}",
-                kind="verify",
-                command=_verify_command(vault_dir, project, scope),
-                status="completed",
-                write_capable=False,
-                write_requested=False,
-                summary=_verification_step_summary(verification_report),
-            )
-        )
-        initial_sync = "never"
-
-    primary_packet = build_writing_session(
-        vault_dir=vault_dir,
-        project=project,
-        out_dir=out_dir,
-        codex_home=codex_home,
-        config_path=config_path,
-        brainstorm_paths=brainstorm_paths,
-        audit_paths=audit_paths,
-        discarded_paths=discarded_paths,
-        palace_path=palace_path,
-        runtime_root=runtime_root,
-        sync=initial_sync,
-        refresh_palace=refresh_palace if verify_mode == "skip" else False,
-        task=main_task,
-        notes=cleaned_notes,
-        write=False,
-        n_results=n_results,
-        run_verification=False,
-        verification_report=verification_report,
-    )
-    prepared_stub = {"status": {"project": primary_packet["project"], "project_root": primary_packet["project_root"], "vault_root": primary_packet["vault_root"], "output_root": default_output_dir(Path(primary_packet["vault_root"]), primary_packet["project"]), "last_synced_at": primary_packet.get("last_synced_at")}, "sync_summary": primary_packet.get("sync_summary"), "synced": primary_packet.get("synced", False)}
-    if verification_report is None:
-        verification_report = _verification_stub_for_bundle(prepared_stub, scope)
-        steps.append(
-            _bundle_step(
-                name=f"verify-{scope}",
-                kind="verify",
-                command=_verify_command(vault_dir, project, scope),
-                status="skipped",
-                write_capable=False,
-                write_requested=False,
-                summary=f"{scope} verification skipped by request",
-            )
-        )
-    steps.append(
-        _bundle_step(
-            name=f"session-{main_task}",
-            kind="session",
-            command=_session_command(Path(primary_packet["project_root"]), main_task, write=False),
-            status="completed",
-            write_capable=False,
-            write_requested=False,
-            summary=_session_step_summary(primary_packet),
-        )
-    )
-
-    recap_packet = None
-    if recap_mode:
-        recap_packet = build_writing_recap(
-            vault_dir=vault_dir,
-            project=project,
-            out_dir=out_dir,
-            codex_home=codex_home,
-            config_path=config_path,
-            brainstorm_paths=brainstorm_paths,
-            audit_paths=audit_paths,
-            discarded_paths=discarded_paths,
-            palace_path=palace_path,
-            runtime_root=runtime_root,
-            sync="never",
-            refresh_palace=False,
-            mode=recap_mode,
-            n_results=n_results,
-        )
-        steps.append(
-            _bundle_step(
-                name=f"recap-{recap_mode}",
-                kind="recap",
-                command=_recap_command(vault_dir, project, recap_mode),
-                status="completed",
-                write_capable=False,
-                write_requested=False,
-                summary=_recap_step_summary(recap_packet),
-            )
-        )
-
-    secondary_packet = None
-    if secondary_task:
-        secondary_packet = build_writing_session(
-            vault_dir=vault_dir,
-            project=project,
-            out_dir=out_dir,
-            codex_home=codex_home,
-            config_path=config_path,
-            brainstorm_paths=brainstorm_paths,
-            audit_paths=audit_paths,
-            discarded_paths=discarded_paths,
-            palace_path=palace_path,
-            runtime_root=runtime_root,
-            sync="never",
-            refresh_palace=False,
-            task=secondary_task,
+            sync=initial_sync,
+            refresh_palace=refresh_palace if verify_mode == "skip" else False,
+            task=main_task,
             notes=cleaned_notes,
             write=False,
             n_results=n_results,
             run_verification=False,
             verification_report=verification_report,
         )
+        prepared_stub = {"status": {"project": primary_packet["project"], "project_root": primary_packet["project_root"], "vault_root": primary_packet["vault_root"], "output_root": default_output_dir(Path(primary_packet["vault_root"]), primary_packet["project"]), "last_synced_at": primary_packet.get("last_synced_at")}, "sync_summary": primary_packet.get("sync_summary"), "synced": primary_packet.get("synced", False)}
+        if verification_report is None:
+            verification_report = _verification_stub_for_bundle(prepared_stub, scope)
+            steps.append(
+                _bundle_step(
+                    name=f"verify-{scope}",
+                    kind="verify",
+                    command=_verify_command(vault_dir, project, scope),
+                    status="skipped",
+                    write_capable=False,
+                    write_requested=False,
+                    summary=f"{scope} verification skipped by request",
+                )
+            )
         steps.append(
             _bundle_step(
-                name=f"session-{secondary_task}",
+                name=f"session-{main_task}",
                 kind="session",
-                command=_session_command(Path(primary_packet["project_root"]), secondary_task, write=False),
+                command=_session_command(Path(primary_packet["project_root"]), main_task, write=False),
                 status="completed",
                 write_capable=False,
                 write_requested=False,
-                summary=_session_step_summary(secondary_packet),
+                summary=_session_step_summary(primary_packet),
             )
         )
 
-    write_task = _bundle_write_task(name)
-    write_packet = None
-    write_command = _session_command(Path(primary_packet["project_root"]), write_task, write=True) if write_task else None
-    if write and write_task:
-        write_packet = build_writing_session(
-            vault_dir=vault_dir,
-            project=project,
+        recap_packet = None
+        if recap_mode:
+            recap_packet = build_writing_recap(
+                vault_dir=vault_dir,
+                project=project,
+                out_dir=out_dir,
+                codex_home=codex_home,
+                config_path=config_path,
+                brainstorm_paths=brainstorm_paths,
+                audit_paths=audit_paths,
+                discarded_paths=discarded_paths,
+                palace_path=palace_path,
+                runtime_root=runtime_root,
+                sync="never",
+                refresh_palace=False,
+                mode=recap_mode,
+                n_results=n_results,
+            )
+            steps.append(
+                _bundle_step(
+                    name=f"recap-{recap_mode}",
+                    kind="recap",
+                    command=_recap_command(vault_dir, project, recap_mode),
+                    status="completed",
+                    write_capable=False,
+                    write_requested=False,
+                    summary=_recap_step_summary(recap_packet),
+                )
+            )
+
+        secondary_packet = None
+        if secondary_task:
+            secondary_packet = build_writing_session(
+                vault_dir=vault_dir,
+                project=project,
+                out_dir=out_dir,
+                codex_home=codex_home,
+                config_path=config_path,
+                brainstorm_paths=brainstorm_paths,
+                audit_paths=audit_paths,
+                discarded_paths=discarded_paths,
+                palace_path=palace_path,
+                runtime_root=runtime_root,
+                sync="never",
+                refresh_palace=False,
+                task=secondary_task,
+                notes=cleaned_notes,
+                write=False,
+                n_results=n_results,
+                run_verification=False,
+                verification_report=verification_report,
+            )
+            steps.append(
+                _bundle_step(
+                    name=f"session-{secondary_task}",
+                    kind="session",
+                    command=_session_command(Path(primary_packet["project_root"]), secondary_task, write=False),
+                    status="completed",
+                    write_capable=False,
+                    write_requested=False,
+                    summary=_session_step_summary(secondary_packet),
+                )
+            )
+
+        write_task = _bundle_write_task(name)
+        write_packet = None
+        write_command = _session_command(Path(primary_packet["project_root"]), write_task, write=True) if write_task else None
+        if write and write_task:
+            write_packet = build_writing_session(
+                vault_dir=vault_dir,
+                project=project,
+                out_dir=out_dir,
+                codex_home=codex_home,
+                config_path=config_path,
+                brainstorm_paths=brainstorm_paths,
+                audit_paths=audit_paths,
+                discarded_paths=discarded_paths,
+                palace_path=palace_path,
+                runtime_root=runtime_root,
+                sync=sync,
+                refresh_palace=False,
+                task=write_task,
+                notes=cleaned_notes,
+                write=True,
+                n_results=n_results,
+                run_verification=False,
+                verification_report=verification_report,
+            )
+            steps.append(
+                _bundle_step(
+                    name=f"write-{name}",
+                    kind="write",
+                    command=write_command,
+                    status="completed",
+                    write_capable=True,
+                    write_requested=True,
+                    summary=_write_step_summary(write_packet, "write flow completed"),
+                )
+            )
+        elif write_task:
+            steps.append(
+                _bundle_step(
+                    name=f"write-{name}",
+                    kind="write",
+                    command=write_command,
+                    status="skipped",
+                    write_capable=True,
+                    write_requested=False,
+                    summary="Preview only; rerun with --write to persist the bundle's sidecar-safe artifact(s).",
+                )
+            )
+
+        effective_primary = write_packet or primary_packet
+        bundle_write_command = _bundle_command(vault_dir, project, name, write=True, verify_mode=verify_mode) if write_task and not write else None
+        doc_loadout = _unique_lines(
+            list(effective_primary.get("doc_loadout", []))
+            + list((secondary_packet or {}).get("doc_loadout", []))
+        )
+        file_targets = _unique_lines(
+            list(effective_primary.get("file_targets", []))
+            + list((secondary_packet or {}).get("file_targets", []))
+        )
+        warnings = _unique_lines(
+            list(verification_report.get("warnings", []))
+            + list(effective_primary.get("warnings", []))
+            + list((recap_packet or {}).get("warnings", []))
+            + list((secondary_packet or {}).get("warnings", []))
+        )
+
+        report = {
+            "project": effective_primary["project"],
+            "project_root": effective_primary["project_root"],
+            "vault_root": effective_primary["vault_root"],
+            "bundle": name,
+            "verify_mode": verify_mode,
+            "state": effective_primary["state"],
+            "stale": effective_primary["stale"],
+            "reasons": effective_primary.get("reasons", []),
+            "last_synced_at": effective_primary.get("last_synced_at"),
+            "operative_phase": effective_primary.get("operative_phase"),
+            "continuity_state": verification_report.get("state", "unknown"),
+            "finding_counts": verification_report.get("finding_counts", {"error": 0, "warn": 0, "info": 0}),
+            "top_findings": verification_report.get("findings", [])[:3],
+            "fact_layer_state": verification_report.get("fact_layer_state", "missing"),
+            "fact_counts": verification_report.get(
+                "fact_counts",
+                {
+                    "active": 0,
+                    "retired": 0,
+                    "add": 0,
+                    "update": 0,
+                    "delete": 0,
+                    "none": 0,
+                    "conflicts": 0,
+                },
+            ),
+            "fact_ops_preview": verification_report.get("fact_ops_preview", [])[:5],
+            "fact_conflicts": verification_report.get("fact_conflicts", [])[:5],
+            "fact_highlights": verification_report.get("fact_highlights", [])[:5],
+            "last_fact_sync_at": verification_report.get("last_fact_sync_at"),
+            "fact_layer_ready": verification_report.get("fact_layer_ready", False),
+            "doc_loadout": doc_loadout,
+            "file_targets": file_targets,
+            "artifact_targets": _bundle_top_level_artifact_targets(name, effective_primary),
+            "recap_sections": _bundle_recap_sections(name, recap_packet, effective_primary, secondary_packet),
+            "steps": steps,
+            "recommended_actions": _bundle_recommended_actions(
+                verify_report=verification_report if verify_mode != "skip" else None,
+                primary_packet=effective_primary,
+                secondary_packet=secondary_packet,
+                write_command=write_command,
+                bundle_write_command=bundle_write_command,
+            ),
+            "recommended_commands": _bundle_recommended_commands(
+                vault_dir=vault_dir,
+                project=project,
+                name=name,
+                verify_mode=verify_mode,
+                write=write,
+                primary_packet=effective_primary,
+                secondary_packet=secondary_packet,
+            ),
+            "write_performed": bool(write_packet and write_packet.get("write_performed")),
+            "paths_written": list(write_packet.get("paths_written", [])) if write_packet else [],
+            "sync_performed": bool(
+                verification_report.get("synced")
+                or effective_primary.get("sync_performed")
+                or effective_primary.get("synced")
+                or (recap_packet or {}).get("synced")
+                or (secondary_packet or {}).get("sync_performed")
+            ),
+            "warnings": warnings,
+        }
+    finally:
+        end_health_command(health_token)
+    if should_record_health:
+        status = _health_status_stub(
+            project=report["project"],
+            project_root=report["project_root"],
+            vault_root=report["vault_root"],
+            state=report["state"],
+            stale=report["stale"],
+            last_synced_at=report.get("last_synced_at"),
+            room_counts={},
             out_dir=out_dir,
-            codex_home=codex_home,
-            config_path=config_path,
-            brainstorm_paths=brainstorm_paths,
-            audit_paths=audit_paths,
-            discarded_paths=discarded_paths,
             palace_path=palace_path,
             runtime_root=runtime_root,
-            sync=sync,
-            refresh_palace=False,
-            task=write_task,
-            notes=cleaned_notes,
-            write=True,
-            n_results=n_results,
-            run_verification=False,
-            verification_report=verification_report,
         )
-        steps.append(
-            _bundle_step(
-                name=f"write-{name}",
-                kind="write",
-                command=write_command,
-                status="completed",
-                write_capable=True,
-                write_requested=True,
-                summary=_write_step_summary(write_packet, "write flow completed"),
-            )
+        _record_health_for_status(
+            status,
+            command="bundle",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=report.get("sync_performed", False),
+            write_performed=report.get("write_performed", False),
+            continuity_state=report.get("continuity_state"),
+            fact_layer_state=report.get("fact_layer_state"),
         )
-    elif write_task:
-        steps.append(
-            _bundle_step(
-                name=f"write-{name}",
-                kind="write",
-                command=write_command,
-                status="skipped",
-                write_capable=True,
-                write_requested=False,
-                summary="Preview only; rerun with --write to persist the bundle's sidecar-safe artifact(s).",
-            )
-        )
-
-    effective_primary = write_packet or primary_packet
-    bundle_write_command = _bundle_command(vault_dir, project, name, write=True, verify_mode=verify_mode) if write_task and not write else None
-    doc_loadout = _unique_lines(
-        list(effective_primary.get("doc_loadout", []))
-        + list((secondary_packet or {}).get("doc_loadout", []))
-    )
-    file_targets = _unique_lines(
-        list(effective_primary.get("file_targets", []))
-        + list((secondary_packet or {}).get("file_targets", []))
-    )
-    warnings = _unique_lines(
-        list(verification_report.get("warnings", []))
-        + list(effective_primary.get("warnings", []))
-        + list((recap_packet or {}).get("warnings", []))
-        + list((secondary_packet or {}).get("warnings", []))
-    )
-
-    return {
-        "project": effective_primary["project"],
-        "project_root": effective_primary["project_root"],
-        "vault_root": effective_primary["vault_root"],
-        "bundle": name,
-        "verify_mode": verify_mode,
-        "state": effective_primary["state"],
-        "stale": effective_primary["stale"],
-        "reasons": effective_primary.get("reasons", []),
-        "last_synced_at": effective_primary.get("last_synced_at"),
-        "operative_phase": effective_primary.get("operative_phase"),
-        "continuity_state": verification_report.get("state", "unknown"),
-        "finding_counts": verification_report.get("finding_counts", {"error": 0, "warn": 0, "info": 0}),
-        "top_findings": verification_report.get("findings", [])[:3],
-        "fact_layer_state": verification_report.get("fact_layer_state", "missing"),
-        "fact_counts": verification_report.get(
-            "fact_counts",
-            {
-                "active": 0,
-                "retired": 0,
-                "add": 0,
-                "update": 0,
-                "delete": 0,
-                "none": 0,
-                "conflicts": 0,
-            },
-        ),
-        "fact_ops_preview": verification_report.get("fact_ops_preview", [])[:5],
-        "fact_conflicts": verification_report.get("fact_conflicts", [])[:5],
-        "fact_highlights": verification_report.get("fact_highlights", [])[:5],
-        "last_fact_sync_at": verification_report.get("last_fact_sync_at"),
-        "fact_layer_ready": verification_report.get("fact_layer_ready", False),
-        "doc_loadout": doc_loadout,
-        "file_targets": file_targets,
-        "artifact_targets": _bundle_top_level_artifact_targets(name, effective_primary),
-        "recap_sections": _bundle_recap_sections(name, recap_packet, effective_primary, secondary_packet),
-        "steps": steps,
-        "recommended_actions": _bundle_recommended_actions(
-            verify_report=verification_report if verify_mode != "skip" else None,
-            primary_packet=effective_primary,
-            secondary_packet=secondary_packet,
-            write_command=write_command,
-            bundle_write_command=bundle_write_command,
-        ),
-        "recommended_commands": _bundle_recommended_commands(
-            vault_dir=vault_dir,
-            project=project,
-            name=name,
-            verify_mode=verify_mode,
-            write=write,
-            primary_packet=effective_primary,
-            secondary_packet=secondary_packet,
-        ),
-        "write_performed": bool(write_packet and write_packet.get("write_performed")),
-        "paths_written": list(write_packet.get("paths_written", [])) if write_packet else [],
-        "sync_performed": bool(
-            verification_report.get("synced")
-            or effective_primary.get("sync_performed")
-            or effective_primary.get("synced")
-            or (recap_packet or {}).get("synced")
-            or (secondary_packet or {}).get("sync_performed")
-        ),
-        "warnings": warnings,
-    }
+    return report
 
 
 def render_writing_bundle(bundle_data: dict) -> str:
@@ -2911,34 +2995,11 @@ def build_writing_routine(
         raise ValueError(f"Unknown writing routine: {name}")
     if verify_mode not in BUNDLE_VERIFY_MODES:
         raise ValueError(f"Unknown writing routine verify mode: {verify_mode}")
-
-    bundle_name = _routine_bundle_name(name)
-    bundle_packet = build_writing_bundle(
-        vault_dir=vault_dir,
-        project=project,
-        out_dir=out_dir,
-        codex_home=codex_home,
-        config_path=config_path,
-        brainstorm_paths=brainstorm_paths,
-        audit_paths=audit_paths,
-        discarded_paths=discarded_paths,
-        palace_path=palace_path,
-        runtime_root=runtime_root,
-        sync=sync,
-        refresh_palace=refresh_palace,
-        name=bundle_name,
-        verify_mode=verify_mode,
-        notes=notes,
-        write=write,
-        n_results=n_results,
-    )
-
-    followup_task = _routine_followup_task(name, bundle_packet.get("operative_phase"))
-    followup_packet = None
-    steps = list(bundle_packet.get("steps", []))
-
-    if followup_task:
-        followup_packet = build_writing_session(
+    started_at = perf_counter()
+    health_token, should_record_health = begin_health_command()
+    try:
+        bundle_name = _routine_bundle_name(name)
+        bundle_packet = build_writing_bundle(
             vault_dir=vault_dir,
             project=project,
             out_dir=out_dir,
@@ -2949,108 +3010,158 @@ def build_writing_routine(
             discarded_paths=discarded_paths,
             palace_path=palace_path,
             runtime_root=runtime_root,
-            sync="never",
-            refresh_palace=False,
-            task=followup_task,
-            notes=notes,
-            write=False,
-            n_results=n_results,
-            run_verification=False,
-            verification_report=_bundle_verification_report_for_session(bundle_packet),
-        )
-        steps.append(
-            _bundle_step(
-                name=f"session-{followup_task}",
-                kind="session",
-                command=_session_command(Path(bundle_packet["project_root"]), followup_task, write=False),
-                status="completed",
-                write_capable=False,
-                write_requested=False,
-                summary=_session_step_summary(followup_packet),
-            )
-        )
-
-    effective_packet = followup_packet or bundle_packet
-    warnings = _unique_lines(
-        list(bundle_packet.get("warnings", []))
-        + list((followup_packet or {}).get("warnings", []))
-    )
-    doc_loadout = _unique_lines(
-        list((followup_packet or {}).get("doc_loadout", []))
-        + list(bundle_packet.get("doc_loadout", []))
-    )
-    file_targets = _unique_lines(
-        list((followup_packet or {}).get("file_targets", []))
-        + list(bundle_packet.get("file_targets", []))
-    )
-    artifact_targets = _unique_lines(
-        list(bundle_packet.get("artifact_targets", []))
-        + list((followup_packet or {}).get("artifact_targets", []))
-    )
-    recap_sections = _merge_section_maps(
-        bundle_packet.get("recap_sections", {}),
-        (followup_packet or {}).get("recap_sections", {}),
-    )
-
-    return {
-        "project": bundle_packet["project"],
-        "project_root": bundle_packet["project_root"],
-        "vault_root": bundle_packet["vault_root"],
-        "routine": name,
-        "verify_mode": verify_mode,
-        "state": bundle_packet["state"],
-        "stale": bundle_packet["stale"],
-        "reasons": list(bundle_packet.get("reasons", [])),
-        "last_synced_at": bundle_packet.get("last_synced_at"),
-        "operative_phase": effective_packet.get("operative_phase") or bundle_packet.get("operative_phase"),
-        "continuity_state": bundle_packet.get("continuity_state"),
-        "finding_counts": dict(bundle_packet.get("finding_counts", {"error": 0, "warn": 0, "info": 0})),
-        "top_findings": list(bundle_packet.get("top_findings", [])),
-        "fact_layer_state": bundle_packet.get("fact_layer_state", "missing"),
-        "fact_counts": dict(
-            bundle_packet.get(
-                "fact_counts",
-                {
-                    "active": 0,
-                    "retired": 0,
-                    "add": 0,
-                    "update": 0,
-                    "delete": 0,
-                    "none": 0,
-                    "conflicts": 0,
-                },
-            )
-        ),
-        "fact_ops_preview": list(bundle_packet.get("fact_ops_preview", [])),
-        "fact_conflicts": list(bundle_packet.get("fact_conflicts", [])),
-        "fact_highlights": list(bundle_packet.get("fact_highlights", [])),
-        "last_fact_sync_at": bundle_packet.get("last_fact_sync_at"),
-        "fact_layer_ready": bundle_packet.get("fact_layer_ready", False),
-        "doc_loadout": doc_loadout,
-        "file_targets": file_targets,
-        "artifact_targets": artifact_targets,
-        "recap_sections": recap_sections,
-        "steps": steps,
-        "recommended_actions": _routine_recommended_actions(
-            name=name,
-            bundle_packet=bundle_packet,
-            followup_packet=followup_packet,
-            write=write,
-        ),
-        "recommended_commands": _routine_recommended_commands(
-            vault_dir=vault_dir,
-            project=project,
-            name=name,
+            sync=sync,
+            refresh_palace=refresh_palace,
+            name=bundle_name,
             verify_mode=verify_mode,
+            notes=notes,
             write=write,
-            bundle_packet=bundle_packet,
-            followup_packet=followup_packet,
-        ),
-        "write_performed": bundle_packet.get("write_performed", False),
-        "paths_written": list(bundle_packet.get("paths_written", [])),
-        "sync_performed": bool(bundle_packet.get("sync_performed") or (followup_packet or {}).get("sync_performed")),
-        "warnings": warnings,
-    }
+            n_results=n_results,
+        )
+
+        followup_task = _routine_followup_task(name, bundle_packet.get("operative_phase"))
+        followup_packet = None
+        steps = list(bundle_packet.get("steps", []))
+
+        if followup_task:
+            followup_packet = build_writing_session(
+                vault_dir=vault_dir,
+                project=project,
+                out_dir=out_dir,
+                codex_home=codex_home,
+                config_path=config_path,
+                brainstorm_paths=brainstorm_paths,
+                audit_paths=audit_paths,
+                discarded_paths=discarded_paths,
+                palace_path=palace_path,
+                runtime_root=runtime_root,
+                sync="never",
+                refresh_palace=False,
+                task=followup_task,
+                notes=notes,
+                write=False,
+                n_results=n_results,
+                run_verification=False,
+                verification_report=_bundle_verification_report_for_session(bundle_packet),
+            )
+            steps.append(
+                _bundle_step(
+                    name=f"session-{followup_task}",
+                    kind="session",
+                    command=_session_command(Path(bundle_packet["project_root"]), followup_task, write=False),
+                    status="completed",
+                    write_capable=False,
+                    write_requested=False,
+                    summary=_session_step_summary(followup_packet),
+                )
+            )
+
+        effective_packet = followup_packet or bundle_packet
+        warnings = _unique_lines(
+            list(bundle_packet.get("warnings", []))
+            + list((followup_packet or {}).get("warnings", []))
+        )
+        doc_loadout = _unique_lines(
+            list((followup_packet or {}).get("doc_loadout", []))
+            + list(bundle_packet.get("doc_loadout", []))
+        )
+        file_targets = _unique_lines(
+            list((followup_packet or {}).get("file_targets", []))
+            + list(bundle_packet.get("file_targets", []))
+        )
+        artifact_targets = _unique_lines(
+            list(bundle_packet.get("artifact_targets", []))
+            + list((followup_packet or {}).get("artifact_targets", []))
+        )
+        recap_sections = _merge_section_maps(
+            bundle_packet.get("recap_sections", {}),
+            (followup_packet or {}).get("recap_sections", {}),
+        )
+
+        report = {
+            "project": bundle_packet["project"],
+            "project_root": bundle_packet["project_root"],
+            "vault_root": bundle_packet["vault_root"],
+            "routine": name,
+            "verify_mode": verify_mode,
+            "state": bundle_packet["state"],
+            "stale": bundle_packet["stale"],
+            "reasons": list(bundle_packet.get("reasons", [])),
+            "last_synced_at": bundle_packet.get("last_synced_at"),
+            "operative_phase": effective_packet.get("operative_phase") or bundle_packet.get("operative_phase"),
+            "continuity_state": bundle_packet.get("continuity_state"),
+            "finding_counts": dict(bundle_packet.get("finding_counts", {"error": 0, "warn": 0, "info": 0})),
+            "top_findings": list(bundle_packet.get("top_findings", [])),
+            "fact_layer_state": bundle_packet.get("fact_layer_state", "missing"),
+            "fact_counts": dict(
+                bundle_packet.get(
+                    "fact_counts",
+                    {
+                        "active": 0,
+                        "retired": 0,
+                        "add": 0,
+                        "update": 0,
+                        "delete": 0,
+                        "none": 0,
+                        "conflicts": 0,
+                    },
+                )
+            ),
+            "fact_ops_preview": list(bundle_packet.get("fact_ops_preview", [])),
+            "fact_conflicts": list(bundle_packet.get("fact_conflicts", [])),
+            "fact_highlights": list(bundle_packet.get("fact_highlights", [])),
+            "last_fact_sync_at": bundle_packet.get("last_fact_sync_at"),
+            "fact_layer_ready": bundle_packet.get("fact_layer_ready", False),
+            "doc_loadout": doc_loadout,
+            "file_targets": file_targets,
+            "artifact_targets": artifact_targets,
+            "recap_sections": recap_sections,
+            "steps": steps,
+            "recommended_actions": _routine_recommended_actions(
+                name=name,
+                bundle_packet=bundle_packet,
+                followup_packet=followup_packet,
+                write=write,
+            ),
+            "recommended_commands": _routine_recommended_commands(
+                vault_dir=vault_dir,
+                project=project,
+                name=name,
+                verify_mode=verify_mode,
+                write=write,
+                bundle_packet=bundle_packet,
+                followup_packet=followup_packet,
+            ),
+            "write_performed": bundle_packet.get("write_performed", False),
+            "paths_written": list(bundle_packet.get("paths_written", [])),
+            "sync_performed": bool(bundle_packet.get("sync_performed") or (followup_packet or {}).get("sync_performed")),
+            "warnings": warnings,
+        }
+    finally:
+        end_health_command(health_token)
+    if should_record_health:
+        status = _health_status_stub(
+            project=report["project"],
+            project_root=report["project_root"],
+            vault_root=report["vault_root"],
+            state=report["state"],
+            stale=report["stale"],
+            last_synced_at=report.get("last_synced_at"),
+            room_counts={},
+            out_dir=out_dir,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+        )
+        _record_health_for_status(
+            status,
+            command="routine",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=report.get("sync_performed", False),
+            write_performed=report.get("write_performed", False),
+            continuity_state=report.get("continuity_state"),
+            fact_layer_state=report.get("fact_layer_state"),
+        )
+    return report
 
 
 def render_writing_routine(routine_data: dict) -> str:
@@ -3353,10 +3464,41 @@ def build_writing_automation(
         raise ValueError(f"Unknown writing automation verify mode: {verify_mode}")
     if schedule_profile not in AUTOMATE_SCHEDULE_PROFILES:
         raise ValueError(f"Unknown writing automation schedule profile: {schedule_profile}")
+    started_at = perf_counter()
+    health_token, should_record_health = begin_health_command()
+    try:
+        resolved_name = name
+        if name == "recommended":
+            status = get_writing_sidecar_status(
+                vault_dir=vault_dir,
+                project=project,
+                out_dir=out_dir,
+                codex_home=codex_home,
+                config_path=config_path,
+                brainstorm_paths=brainstorm_paths,
+                audit_paths=audit_paths,
+                discarded_paths=discarded_paths,
+                palace_path=palace_path,
+                runtime_root=runtime_root,
+            )
+            project_root = Path(status["project_root"])
+            doc_bundle = _load_live_doc_bundle(project_root)
+            verification = _cached_verification_summary(Path(status["output_root"]))
+            workflow_checks = _collect_workflow_checks(project_root)
+            recommendations = _workflow_recommendations(
+                project_root=str(project_root),
+                state=status["state"],
+                stale=status["stale"],
+                operative_phase=_derive_operative_phase(doc_bundle, _extract_phase(doc_bundle)),
+                status_text=_extract_field(doc_bundle, "status"),
+                next_action=_extract_field(doc_bundle, "next_action"),
+                continuity_state=verification["continuity_state"],
+                verification_stale=verification["verification_stale"],
+                assistant_ready=_assistant_ready(workflow_checks),
+            )
+            resolved_name = recommendations["recommended_routine"]
 
-    resolved_name = name
-    if name == "recommended":
-        status = get_writing_sidecar_status(
+        routine_packet = build_writing_routine(
             vault_dir=vault_dir,
             project=project,
             out_dir=out_dir,
@@ -3367,112 +3509,104 @@ def build_writing_automation(
             discarded_paths=discarded_paths,
             palace_path=palace_path,
             runtime_root=runtime_root,
+            sync=sync,
+            refresh_palace=refresh_palace,
+            name=resolved_name,
+            verify_mode=verify_mode,
+            notes=None,
+            write=False,
+            n_results=n_results,
         )
-        project_root = Path(status["project_root"])
-        doc_bundle = _load_live_doc_bundle(project_root)
-        verification = _cached_verification_summary(Path(status["output_root"]))
-        workflow_checks = _collect_workflow_checks(project_root)
-        recommendations = _workflow_recommendations(
-            project_root=str(project_root),
-            state=status["state"],
-            stale=status["stale"],
-            operative_phase=_derive_operative_phase(doc_bundle, _extract_phase(doc_bundle)),
-            status_text=_extract_field(doc_bundle, "status"),
-            next_action=_extract_field(doc_bundle, "next_action"),
-            continuity_state=verification["continuity_state"],
-            verification_stale=verification["verification_stale"],
-            assistant_ready=_assistant_ready(workflow_checks),
-        )
-        resolved_name = recommendations["recommended_routine"]
 
-    routine_packet = build_writing_routine(
-        vault_dir=vault_dir,
-        project=project,
-        out_dir=out_dir,
-        codex_home=codex_home,
-        config_path=config_path,
-        brainstorm_paths=brainstorm_paths,
-        audit_paths=audit_paths,
-        discarded_paths=discarded_paths,
-        palace_path=palace_path,
-        runtime_root=runtime_root,
-        sync=sync,
-        refresh_palace=refresh_palace,
-        name=resolved_name,
-        verify_mode=verify_mode,
-        notes=None,
-        write=False,
-        n_results=n_results,
-    )
-
-    entry_command = _automation_entry_command(
-        project_root=routine_packet["project_root"],
-        routine=resolved_name,
-        verify_mode=verify_mode,
-        sync=sync,
-    )
-    write_variant_command = _automation_write_variant_command(
-        project_root=routine_packet["project_root"],
-        routine=resolved_name,
-        verify_mode=verify_mode,
-        sync=sync,
-    )
-    recommended_commands = _unique_lines(
-        [item for item in (entry_command, write_variant_command) if item]
-        + list(routine_packet.get("recommended_commands", []))
-    )
-
-    report = {
-        "project": routine_packet["project"],
-        "project_root": routine_packet["project_root"],
-        "vault_root": routine_packet["vault_root"],
-        "target": target,
-        "name": name,
-        "routine": resolved_name,
-        "state": routine_packet["state"],
-        "stale": routine_packet["stale"],
-        "reasons": list(routine_packet.get("reasons", [])),
-        "last_synced_at": routine_packet.get("last_synced_at"),
-        "operative_phase": routine_packet.get("operative_phase"),
-        "continuity_state": routine_packet.get("continuity_state"),
-        "finding_counts": dict(routine_packet.get("finding_counts", {"error": 0, "warn": 0, "info": 0})),
-        "top_findings": list(routine_packet.get("top_findings", [])),
-        "doc_loadout": list(routine_packet.get("doc_loadout", [])),
-        "file_targets": list(routine_packet.get("file_targets", [])),
-        "artifact_targets": list(routine_packet.get("artifact_targets", [])),
-        "entry_command": entry_command,
-        "write_variant_command": write_variant_command,
-        "prompt": _automation_prompt(
+        entry_command = _automation_entry_command(
+            project_root=routine_packet["project_root"],
             routine=resolved_name,
-            entry_command=entry_command,
-            write_variant_command=write_variant_command,
-            routine_packet=routine_packet,
-        ),
-        "expected_outputs": _automation_expected_outputs(resolved_name),
-        "recommended_actions": list(routine_packet.get("recommended_actions", [])),
-        "recommended_commands": recommended_commands,
-        "warnings": list(routine_packet.get("warnings", [])),
-    }
+            verify_mode=verify_mode,
+            sync=sync,
+        )
+        write_variant_command = _automation_write_variant_command(
+            project_root=routine_packet["project_root"],
+            routine=resolved_name,
+            verify_mode=verify_mode,
+            sync=sync,
+        )
+        recommended_commands = _unique_lines(
+            [item for item in (entry_command, write_variant_command) if item]
+            + list(routine_packet.get("recommended_commands", []))
+        )
 
-    if mode == "helper":
-        return report
-
-    resolved_schedule_profile = _resolve_automation_schedule_profile(resolved_name, schedule_profile)
-    report.update(
-        {
-            "automation_name": _automation_suggestion_name(report["project"], resolved_name),
-            "automation_prompt": _automation_suggestion_prompt(
+        report = {
+            "project": routine_packet["project"],
+            "project_root": routine_packet["project_root"],
+            "vault_root": routine_packet["vault_root"],
+            "target": target,
+            "name": name,
+            "routine": resolved_name,
+            "state": routine_packet["state"],
+            "stale": routine_packet["stale"],
+            "reasons": list(routine_packet.get("reasons", [])),
+            "last_synced_at": routine_packet.get("last_synced_at"),
+            "operative_phase": routine_packet.get("operative_phase"),
+            "continuity_state": routine_packet.get("continuity_state"),
+            "finding_counts": dict(routine_packet.get("finding_counts", {"error": 0, "warn": 0, "info": 0})),
+            "top_findings": list(routine_packet.get("top_findings", [])),
+            "doc_loadout": list(routine_packet.get("doc_loadout", [])),
+            "file_targets": list(routine_packet.get("file_targets", [])),
+            "artifact_targets": list(routine_packet.get("artifact_targets", [])),
+            "entry_command": entry_command,
+            "write_variant_command": write_variant_command,
+            "prompt": _automation_prompt(
                 routine=resolved_name,
                 entry_command=entry_command,
                 write_variant_command=write_variant_command,
                 routine_packet=routine_packet,
             ),
-            "automation_rrule": _automation_schedule_rrule(resolved_schedule_profile),
-            "automation_cwds": [report["project_root"]],
-            "automation_status": AUTOMATE_STATUS,
-            "schedule_profile": resolved_schedule_profile,
+            "expected_outputs": _automation_expected_outputs(resolved_name),
+            "recommended_actions": list(routine_packet.get("recommended_actions", [])),
+            "recommended_commands": recommended_commands,
+            "warnings": list(routine_packet.get("warnings", [])),
         }
-    )
+
+        if mode != "helper":
+            resolved_schedule_profile = _resolve_automation_schedule_profile(resolved_name, schedule_profile)
+            report.update(
+                {
+                    "automation_name": _automation_suggestion_name(report["project"], resolved_name),
+                    "automation_prompt": _automation_suggestion_prompt(
+                        routine=resolved_name,
+                        entry_command=entry_command,
+                        write_variant_command=write_variant_command,
+                        routine_packet=routine_packet,
+                    ),
+                    "automation_rrule": _automation_schedule_rrule(resolved_schedule_profile),
+                    "automation_cwds": [report["project_root"]],
+                    "automation_status": AUTOMATE_STATUS,
+                    "schedule_profile": resolved_schedule_profile,
+                }
+            )
+    finally:
+        end_health_command(health_token)
+    if should_record_health:
+        status = _health_status_stub(
+            project=report["project"],
+            project_root=report["project_root"],
+            vault_root=report["vault_root"],
+            state=report["state"],
+            stale=report["stale"],
+            last_synced_at=report.get("last_synced_at"),
+            room_counts={},
+            out_dir=out_dir,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+        )
+        _record_health_for_status(
+            status,
+            command="automate",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=routine_packet.get("sync_performed", False),
+            write_performed=False,
+            continuity_state=report.get("continuity_state"),
+        )
     return report
 
 
@@ -3658,140 +3792,151 @@ def maintain_writing_sidecar(
 ) -> dict:
     if kind not in MAINTAIN_KINDS:
         raise ValueError(f"Unknown writing maintain kind: {kind}")
-
-    prepared = prepare_writing_sidecar(
-        vault_dir=vault_dir,
-        project=project,
-        out_dir=out_dir,
-        codex_home=codex_home,
-        config_path=config_path,
-        brainstorm_paths=brainstorm_paths,
-        audit_paths=audit_paths,
-        discarded_paths=discarded_paths,
-        palace_path=palace_path,
-        runtime_root=runtime_root,
-        sync=sync,
-        refresh_palace=False,
-    )
-    status = prepared["status"]
-    project_root = Path(status["project_root"])
-    doc_bundle = _load_live_doc_bundle(project_root)
-    warnings = list(prepared["warnings"])
-    clean_notes = _clean_note_list(notes or [])
-    chapter_number = _resolve_chapter_number(project_root, doc_bundle, chapter)
-    if chapter_number is None:
-        raise ValueError(
-            "Could not infer a chapter number for sidecar maintenance. Pass --chapter <n>."
+    started_at = perf_counter()
+    with health_command_scope() as should_record_health:
+        prepared = prepare_writing_sidecar(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            sync=sync,
+            refresh_palace=False,
         )
-
-    artifacts = _build_maintenance_artifacts(
-        kind=kind,
-        status=status,
-        doc_bundle=doc_bundle,
-        notes=clean_notes,
-        slug=slug,
-        chapter_number=chapter_number,
-        n_results=n_results,
-        warnings=warnings,
-    )
-
-    paths_written: list[str] = []
-    sync_performed = False
-    sync_summary = prepared["sync_summary"]
-
-    if write:
-        for artifact in artifacts:
-            artifact_path = Path(artifact["path"])
-            _ensure_dir(artifact_path.parent)
-            artifact_path.write_text(artifact["content"], encoding="utf-8")
-            paths_written.append(str(artifact_path))
-
-        if sync != "never":
-            post = prepare_writing_sidecar(
-                vault_dir=vault_dir,
-                project=project,
-                out_dir=out_dir,
-                codex_home=codex_home,
-                config_path=config_path,
-                brainstorm_paths=brainstorm_paths,
-                audit_paths=audit_paths,
-                discarded_paths=discarded_paths,
-                palace_path=palace_path,
-                runtime_root=runtime_root,
-                sync=sync,
-                refresh_palace=False,
-            )
-            status = post["status"]
-            sync_summary = post["sync_summary"]
-            sync_performed = post["synced"]
-            warnings.extend(post["warnings"])
-        else:
-            status = get_writing_sidecar_status(
-                vault_dir=vault_dir,
-                project=project,
-                out_dir=out_dir,
-                codex_home=codex_home,
-                config_path=config_path,
-                brainstorm_paths=brainstorm_paths,
-                audit_paths=audit_paths,
-                discarded_paths=discarded_paths,
-                palace_path=palace_path,
-                runtime_root=runtime_root,
+        status = prepared["status"]
+        project_root = Path(status["project_root"])
+        doc_bundle = _load_live_doc_bundle(project_root)
+        warnings = list(prepared["warnings"])
+        clean_notes = _clean_note_list(notes or [])
+        chapter_number = _resolve_chapter_number(project_root, doc_bundle, chapter)
+        if chapter_number is None:
+            raise ValueError(
+                "Could not infer a chapter number for sidecar maintenance. Pass --chapter <n>."
             )
 
-    source_inputs = _summarize_maintenance_sources(doc_bundle, artifacts, clean_notes)
-    fact_report = None
-    if write:
-        fact_report = _build_fact_layer_report(
-            status,
-            _build_verify_source_bundle(project_root, _load_live_doc_bundle(project_root)),
-            scope="full",
-            apply=True,
-            write_preview=True,
+        artifacts = _build_maintenance_artifacts(
+            kind=kind,
+            status=status,
+            doc_bundle=doc_bundle,
+            notes=clean_notes,
+            slug=slug,
+            chapter_number=chapter_number,
+            n_results=n_results,
+            warnings=warnings,
         )
-        warnings.extend(fact_report.get("warnings", []))
 
-    return {
-        "project": status["project"],
-        "project_root": status["project_root"],
-        "vault_root": status["vault_root"],
-        "kind": kind,
-        "mode": "write" if write else "preview",
-        "write_performed": write,
-        "paths_written": paths_written,
-        "sync_performed": sync_performed,
-        "sync_summary": sync_summary,
-        "state": status["state"],
-        "stale": status["stale"],
-        "reasons": status["stale_reasons"],
-        "last_synced_at": status["last_synced_at"],
-        "warnings": _unique_lines(warnings),
-        "source_inputs": source_inputs,
-        "generated_sections": {
-            artifact["kind"]: list(artifact["sections"].keys()) for artifact in artifacts
-        },
-        "artifacts": artifacts,
-        "fact_layer_state": (fact_report or {}).get("fact_layer_state", "missing"),
-        "fact_counts": (fact_report or {}).get(
-            "fact_counts",
-            {
-                "active": 0,
-                "retired": 0,
-                "add": 0,
-                "update": 0,
-                "delete": 0,
-                "none": 0,
-                "conflicts": 0,
+        paths_written: list[str] = []
+        sync_performed = False
+        sync_summary = prepared["sync_summary"]
+
+        if write:
+            for artifact in artifacts:
+                artifact_path = Path(artifact["path"])
+                _ensure_dir(artifact_path.parent)
+                artifact_path.write_text(artifact["content"], encoding="utf-8")
+                paths_written.append(str(artifact_path))
+
+            if sync != "never":
+                post = prepare_writing_sidecar(
+                    vault_dir=vault_dir,
+                    project=project,
+                    out_dir=out_dir,
+                    codex_home=codex_home,
+                    config_path=config_path,
+                    brainstorm_paths=brainstorm_paths,
+                    audit_paths=audit_paths,
+                    discarded_paths=discarded_paths,
+                    palace_path=palace_path,
+                    runtime_root=runtime_root,
+                    sync=sync,
+                    refresh_palace=False,
+                )
+                status = post["status"]
+                sync_summary = post["sync_summary"]
+                sync_performed = post["synced"]
+                warnings.extend(post["warnings"])
+            else:
+                status = get_writing_sidecar_status(
+                    vault_dir=vault_dir,
+                    project=project,
+                    out_dir=out_dir,
+                    codex_home=codex_home,
+                    config_path=config_path,
+                    brainstorm_paths=brainstorm_paths,
+                    audit_paths=audit_paths,
+                    discarded_paths=discarded_paths,
+                    palace_path=palace_path,
+                    runtime_root=runtime_root,
+                )
+
+        source_inputs = _summarize_maintenance_sources(doc_bundle, artifacts, clean_notes)
+        fact_report = None
+        if write:
+            fact_report = _build_fact_layer_report(
+                status,
+                _build_verify_source_bundle(project_root, _load_live_doc_bundle(project_root)),
+                scope="full",
+                apply=True,
+                write_preview=True,
+            )
+            warnings.extend(fact_report.get("warnings", []))
+
+        report = {
+            "project": status["project"],
+            "project_root": status["project_root"],
+            "vault_root": status["vault_root"],
+            "kind": kind,
+            "mode": "write" if write else "preview",
+            "write_performed": write,
+            "paths_written": paths_written,
+            "sync_performed": sync_performed,
+            "sync_summary": sync_summary,
+            "state": status["state"],
+            "stale": status["stale"],
+            "reasons": status["stale_reasons"],
+            "last_synced_at": status["last_synced_at"],
+            "warnings": _unique_lines(warnings),
+            "source_inputs": source_inputs,
+            "generated_sections": {
+                artifact["kind"]: list(artifact["sections"].keys()) for artifact in artifacts
             },
-        ),
-        "fact_ops_preview": (fact_report or {}).get("fact_ops_preview", []),
-        "fact_conflicts": (fact_report or {}).get("fact_conflicts", []),
-        "fact_highlights": (fact_report or {}).get("fact_highlights", []),
-        "last_fact_sync_at": (fact_report or {}).get("last_fact_sync_at"),
-        "fact_layer_ready": (fact_report or {}).get("fact_layer_ready", False),
-        "fact_write_performed": (fact_report or {}).get("fact_write_performed", False),
-        "fact_paths_written": (fact_report or {}).get("fact_paths_written", []),
-    }
+            "artifacts": artifacts,
+            "fact_layer_state": (fact_report or {}).get("fact_layer_state", "missing"),
+            "fact_counts": (fact_report or {}).get(
+                "fact_counts",
+                {
+                    "active": 0,
+                    "retired": 0,
+                    "add": 0,
+                    "update": 0,
+                    "delete": 0,
+                    "none": 0,
+                    "conflicts": 0,
+                },
+            ),
+            "fact_ops_preview": (fact_report or {}).get("fact_ops_preview", []),
+            "fact_conflicts": (fact_report or {}).get("fact_conflicts", []),
+            "fact_highlights": (fact_report or {}).get("fact_highlights", []),
+            "last_fact_sync_at": (fact_report or {}).get("last_fact_sync_at"),
+            "fact_layer_ready": (fact_report or {}).get("fact_layer_ready", False),
+            "fact_write_performed": (fact_report or {}).get("fact_write_performed", False),
+            "fact_paths_written": (fact_report or {}).get("fact_paths_written", []),
+        }
+    if should_record_health:
+        _record_health_for_status(
+            status,
+            command="maintain",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=report.get("sync_performed", False),
+            write_performed=report.get("write_performed", False),
+            fact_layer_state=report.get("fact_layer_state"),
+        )
+    return report
 
 
 def render_writing_maintenance(report: dict) -> str:
@@ -6572,21 +6717,34 @@ def verify_writing_sidecar(
     scope: str = "chapter",
     n_results: int = 3,
 ) -> dict:
-    prepared = prepare_writing_sidecar(
-        vault_dir=vault_dir,
-        project=project,
-        out_dir=out_dir,
-        codex_home=codex_home,
-        config_path=config_path,
-        brainstorm_paths=brainstorm_paths,
-        audit_paths=audit_paths,
-        discarded_paths=discarded_paths,
-        palace_path=palace_path,
-        runtime_root=runtime_root,
-        sync=sync,
-        refresh_palace=refresh_palace,
-    )
-    return _build_verification_report(prepared, scope=scope, n_results=n_results, write_cache=True)
+    started_at = perf_counter()
+    with health_command_scope() as should_record_health:
+        prepared = prepare_writing_sidecar(
+            vault_dir=vault_dir,
+            project=project,
+            out_dir=out_dir,
+            codex_home=codex_home,
+            config_path=config_path,
+            brainstorm_paths=brainstorm_paths,
+            audit_paths=audit_paths,
+            discarded_paths=discarded_paths,
+            palace_path=palace_path,
+            runtime_root=runtime_root,
+            sync=sync,
+            refresh_palace=refresh_palace,
+        )
+        report = _build_verification_report(prepared, scope=scope, n_results=n_results, write_cache=True)
+    if should_record_health:
+        _record_health_for_status(
+            prepared["status"],
+            command="verify",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            sync_performed=report.get("synced", False),
+            write_performed=False,
+            continuity_state=report.get("state"),
+            fact_layer_state=report.get("fact_layer_state"),
+        )
+    return report
 
 
 def render_writing_verify(report: dict) -> str:
@@ -7557,6 +7715,109 @@ def _cached_fact_layer_summary(output_root: Path) -> dict:
         ),
         "fact_snapshot_path": str(snapshot_path),
         "fact_preview_path": str(preview_path),
+    }
+
+
+def _health_preview_metrics(output_root: Path) -> tuple[int, int]:
+    preview = _load_fact_preview(_fact_preview_path(output_root))
+    if not preview:
+        return 0, 0
+    return len(preview.get("operations", [])), len(preview.get("conflicts", []))
+
+
+def _cached_health_summary(output_root: Path, *, project=None, project_root=None, vault_root=None) -> dict:
+    return load_health_summary(
+        Path(output_root).expanduser().resolve(),
+        project=project,
+        project_root=Path(project_root).expanduser().resolve() if project_root else None,
+        vault_root=Path(vault_root).expanduser().resolve() if vault_root else None,
+    )
+
+
+def _record_health_for_status(
+    status: dict,
+    *,
+    command: str,
+    duration_ms: int,
+    sync_performed: bool = False,
+    write_performed: bool = False,
+    continuity_state: str | None = None,
+    fact_layer_state: str | None = None,
+) -> dict | None:
+    if not status or not status.get("output_root"):
+        return None
+
+    project_root = Path(status["project_root"]).expanduser().resolve() if status.get("project_root") else None
+    vault_root = Path(status["vault_root"]).expanduser().resolve() if status.get("vault_root") else None
+    if project_root is None or vault_root is None or not project_root.exists() or not vault_root.exists():
+        return None
+
+    output_root = Path(status["output_root"]).expanduser().resolve()
+    manifest = _load_state_manifest(Path(status["manifest_path"])) if status.get("manifest_path") else None
+    verification = _cached_verification_summary(output_root)
+    fact_summary = _cached_fact_layer_summary(output_root)
+    fact_preview_op_count, fact_conflict_count = _health_preview_metrics(output_root)
+    room_counts = dict(status.get("room_counts") or (manifest or {}).get("room_counts") or {})
+
+    event = {
+        "timestamp": _utcnow_iso(),
+        "command": command,
+        "command_family": health_command_family(command, sync_performed=sync_performed),
+        "duration_ms": int(duration_ms),
+        "sync_performed": bool(sync_performed),
+        "write_performed": bool(write_performed),
+        "state": status.get("state"),
+        "stale": bool(status.get("stale")),
+        "continuity_state": continuity_state if continuity_state is not None else verification["continuity_state"],
+        "fact_layer_state": fact_layer_state if fact_layer_state is not None else fact_summary["fact_layer_state"],
+        "fact_preview_op_count": fact_preview_op_count,
+        "fact_conflict_count": fact_conflict_count,
+        "tracked_input_count": len((manifest or {}).get("tracked_inputs", [])),
+        "room_counts": room_counts,
+        "room_total": sum(int(value) for value in room_counts.values()),
+        "palace_available": Path(status["palace_path"]).expanduser().resolve().exists()
+        if status.get("palace_path")
+        else False,
+        "manifest_present": manifest is not None,
+    }
+    return record_health_event(
+        output_root=output_root,
+        project=status["project"],
+        project_root=project_root,
+        vault_root=vault_root,
+        event=event,
+    )
+
+
+def _health_status_stub(
+    *,
+    project: str,
+    project_root: str,
+    vault_root: str,
+    state: str,
+    stale: bool,
+    last_synced_at: str | None = None,
+    room_counts: dict | None = None,
+    out_dir: str | None = None,
+    palace_path: str | None = None,
+    runtime_root: str | None = None,
+) -> dict:
+    resolved_vault_root = Path(vault_root).expanduser().resolve()
+    output_root = Path(out_dir).expanduser().resolve() if out_dir else default_output_dir(resolved_vault_root, project)
+    resolved_palace_path = Path(palace_path).expanduser().resolve() if palace_path else default_palace_dir(resolved_vault_root, project)
+    resolved_runtime_root = Path(runtime_root).expanduser().resolve() if runtime_root else default_runtime_dir(resolved_vault_root, project)
+    return {
+        "project": project,
+        "project_root": project_root,
+        "vault_root": vault_root,
+        "output_root": str(output_root),
+        "manifest_path": str(output_root / STATE_FILENAME),
+        "palace_path": str(resolved_palace_path),
+        "runtime_root": str(resolved_runtime_root),
+        "room_counts": dict(room_counts or {}),
+        "last_synced_at": last_synced_at,
+        "state": state,
+        "stale": stale,
     }
 
 
@@ -8770,6 +9031,12 @@ def doctor_writing_sidecar(
     assistant_ready = _assistant_ready(workflow_checks)
     verification = _cached_verification_summary(Path(context["output_root"]))
     fact_summary = _cached_fact_layer_summary(Path(context["output_root"]))
+    health_summary = _cached_health_summary(
+        Path(context["output_root"]),
+        project=context["project"],
+        project_root=project_root,
+        vault_root=context["vault_root"],
+    )
     doc_bundle = _load_live_doc_bundle(project_root)
     operative_phase = _derive_operative_phase(doc_bundle, _extract_phase(doc_bundle))
     recommendations = _workflow_recommendations(
@@ -8879,6 +9146,14 @@ def doctor_writing_sidecar(
         "verification_stale": verification["verification_stale"],
         "fact_layer_ready": fact_summary["fact_layer_ready"],
         "last_fact_sync_at": fact_summary["last_fact_sync_at"],
+        "health_state": health_summary["health_state"],
+        "backend_review_due": health_summary["backend_review_due"],
+        "recommended_backend_action": health_summary["recommended_backend_action"],
+        "health_reasons": list(health_summary.get("health_reasons", [])),
+        "last_health_check_at": health_summary["last_health_check_at"],
+        "health_sample_count": health_summary["health_sample_count"],
+        "health_summary_path": health_summary["health_summary_path"],
+        "health_metrics": health_summary["health_metrics"],
         "ok": not any(item["status"] == "fail" for item in checks + workflow_checks),
     }
     return report
@@ -8946,6 +9221,16 @@ def print_doctor_report(report: dict):
     print(f"  Facts ready:     {'YES' if report.get('fact_layer_ready') else 'NO'}")
     if report.get("last_fact_sync_at"):
         print(f"  Fact sync:       {report['last_fact_sync_at']}")
+    print(f"  Health:          {str(report.get('health_state', 'unknown')).upper()}")
+    print(f"  Backend action:  {report.get('recommended_backend_action', 'keep_current_backend')}")
+    if report.get("last_health_check_at"):
+        print(f"  Health check:    {report['last_health_check_at']}")
+    if report.get("health_summary_path"):
+        print(f"  Health summary:  {report['health_summary_path']}")
+    if report.get("health_state") in {"watch", "review"}:
+        print("  Health reasons:")
+        for reason in report.get("health_reasons", []):
+            print(f"    - {describe_health_reason(reason)}")
     print(f"\n  Result: {'PASS' if report['ok'] else 'FAIL'}")
     print(f"\n{'=' * 55}\n")
 

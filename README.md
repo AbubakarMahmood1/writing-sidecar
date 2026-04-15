@@ -77,6 +77,7 @@ Structured output is available on:
 - JSON contracts cover `doctor`, `projects`, `verify`, `session`, `bundle`, `routine`, and `automate`
 - fact-noise budgets keep the secondary fact layer from quietly bloating
 - preview/write-boundary tests make sure read commands stay preview-only and write commands only touch sidecar-owned fact files
+- local health telemetry tells `doctor` and `projects` when backend review is actually due instead of making you watch latency by hand
 
 Run the default suite with:
 
@@ -135,6 +136,13 @@ Tool-owned fact layer:
 - `.sidecars/<project>/facts/reconcile_preview.json`
 - `.sidecars/<project>/facts/facts_snapshot.json`
 - `.sidecars/<project>/facts/fact_log.jsonl`
+
+Tool-owned health telemetry:
+
+- `.sidecars/<project>/health/latest.json`
+- `.sidecars/<project>/health/history.jsonl`
+
+Health telemetry is local convenience state. It is not canon, it does not change docs, and `projects` stays read-only by surfacing cached health instead of generating new samples on list.
 
 ## Scope
 
@@ -218,8 +226,8 @@ Command-specific payload keys remain stable too:
 - `session`: `task`, `operative_phase`, `suggested_loadout`, `doc_loadout`, `file_targets`, `continuity_watch`, `phase_guardrails`, `done_criteria`, `recommended_actions`, `recommended_commands`, `artifact_targets`, `write_performed`, `sync_performed`, `queries_run`, `results`, `recap_sections`, `warnings`, `verification_scope`, `continuity_state`, `finding_counts`, `top_findings`, `recommended_repairs`, `fact_layer_state`, `fact_counts`, `fact_ops_preview`, `fact_conflicts`, `fact_highlights`, `last_fact_sync_at`, `fact_layer_ready`
 - `context`: `mode`, `queries_run`, `results`, `warnings`, `suggested_loadout`, `recent_artifacts`
 - `recap`: `mode`, `sections`, `queries_run`, `results`, `warnings`
-- `projects`: `count`, `projects`, including per-project `operative_phase`, `next_action`, `assistant_ready`, `last_checkpoint_at`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`, `recommended_automation_command`, `recommended_schedule_profile`, `fact_layer_ready`, `last_fact_sync_at`
-- `doctor`: `checks`, `workflow_checks`, `assistant_ready`, `ok`, `supported_spec`, `mempalace_version`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`, `recommended_automation_command`, `recommended_schedule_profile`, `fact_layer_ready`, `last_fact_sync_at`
+- `projects`: `count`, `projects`, including per-project `operative_phase`, `next_action`, `assistant_ready`, `last_checkpoint_at`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`, `recommended_automation_command`, `recommended_schedule_profile`, `fact_layer_ready`, `last_fact_sync_at`, `health_state`, `backend_review_due`, `recommended_backend_action`, `health_reasons`, `last_health_check_at`, `health_sample_count`
+- `doctor`: `checks`, `workflow_checks`, `assistant_ready`, `ok`, `supported_spec`, `mempalace_version`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`, `recommended_automation_command`, `recommended_schedule_profile`, `fact_layer_ready`, `last_fact_sync_at`, `health_state`, `backend_review_due`, `recommended_backend_action`, `health_reasons`, `last_health_check_at`, `health_sample_count`, `health_summary_path`, `health_metrics`
 - `verify`: `scope`, `state`, `verified_at`, `finding_counts`, `findings`, `recommended_actions`, `query_packets`, `source_snapshot`, `cache_path`, `fact_layer_state`, `fact_counts`, `fact_ops_preview`, `fact_conflicts`, `fact_highlights`, `last_fact_sync_at`, `fact_layer_ready`
 - `maintain`: `kind`, `mode`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `source_inputs`, `generated_sections`, `fact_layer_state`, `fact_counts`, `fact_ops_preview`, `fact_conflicts`, `fact_highlights`, `last_fact_sync_at`, `fact_layer_ready`, `fact_write_performed`, `fact_paths_written`
 - `bundle`: `bundle`, `verify_mode`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `recap_sections`, `steps`, `recommended_actions`, `recommended_commands`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `fact_layer_state`, `fact_counts`, `fact_conflicts`, `fact_highlights`, `last_fact_sync_at`, `fact_layer_ready`

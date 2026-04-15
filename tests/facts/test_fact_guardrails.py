@@ -4,6 +4,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from writing_sidecar.health import HEALTH_HISTORY_FILENAME, HEALTH_LATEST_FILENAME
 from writing_sidecar.workflow import (
     FACT_LOG_FILENAME,
     FACT_PREVIEW_FILENAME,
@@ -48,9 +49,12 @@ def test_preview_commands_keep_fact_writes_preview_only(witcher_fixture):
     kwargs = workflow_kwargs(witcher_fixture)
     project_root = Path(witcher_fixture["project_root"])
     facts_dir = Path(kwargs["out_dir"]) / "facts"
+    health_dir = Path(kwargs["out_dir"]) / "health"
     preview_path = facts_dir / FACT_PREVIEW_FILENAME
     snapshot_path = facts_dir / FACTS_SNAPSHOT_FILENAME
     log_path = facts_dir / FACT_LOG_FILENAME
+    latest_health_path = health_dir / HEALTH_LATEST_FILENAME
+    history_health_path = health_dir / HEALTH_HISTORY_FILENAME
     current_notes_path = project_root / "_story_bible" / "05_Current_Notes.md"
     current_chapter_notes_path = project_root / "_story_bible" / "05_Current_Chapter_Notes.md"
     before_current_notes = current_notes_path.read_text(encoding="utf-8")
@@ -58,6 +62,10 @@ def test_preview_commands_keep_fact_writes_preview_only(witcher_fixture):
 
     doctor_writing_sidecar(**kwargs)
     list_writing_projects(str(witcher_fixture["vault_root"]))
+
+    assert latest_health_path.exists() is False
+    assert history_health_path.exists() is False
+
     verify_writing_sidecar(**kwargs, scope="chapter", sync="if-needed")
     build_writing_session(**kwargs, task="startup")
     build_writing_bundle(**kwargs, name="startup")
@@ -67,6 +75,10 @@ def test_preview_commands_keep_fact_writes_preview_only(witcher_fixture):
     assert preview_path.exists()
     assert snapshot_path.exists() is False
     assert log_path.exists() is False
+    assert latest_health_path.exists()
+    assert history_health_path.exists()
+    history_events = [line for line in history_health_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(history_events) == 5
     assert current_notes_path.read_text(encoding="utf-8") == before_current_notes
     assert current_chapter_notes_path.read_text(encoding="utf-8") == before_current_chapter_notes
 
@@ -75,9 +87,12 @@ def test_write_capable_flow_persists_fact_files_without_mutating_canon_docs(witc
     kwargs = workflow_kwargs(witcher_fixture)
     project_root = Path(witcher_fixture["project_root"])
     facts_dir = Path(kwargs["out_dir"]) / "facts"
+    health_dir = Path(kwargs["out_dir"]) / "health"
     preview_path = facts_dir / FACT_PREVIEW_FILENAME
     snapshot_path = facts_dir / FACTS_SNAPSHOT_FILENAME
     log_path = facts_dir / FACT_LOG_FILENAME
+    latest_health_path = health_dir / HEALTH_LATEST_FILENAME
+    history_health_path = health_dir / HEALTH_HISTORY_FILENAME
     current_notes_path = project_root / "_story_bible" / "05_Current_Notes.md"
     current_chapter_notes_path = project_root / "_story_bible" / "05_Current_Chapter_Notes.md"
     before_current_notes = current_notes_path.read_text(encoding="utf-8")
@@ -88,6 +103,8 @@ def test_write_capable_flow_persists_fact_files_without_mutating_canon_docs(witc
     assert preview_path.exists()
     assert snapshot_path.exists()
     assert log_path.exists()
+    assert latest_health_path.exists()
+    assert history_health_path.exists()
     assert packet["fact_write_performed"] is True
     assert any(path.endswith(FACTS_SNAPSHOT_FILENAME) for path in packet["fact_paths_written"])
     assert any(path.endswith(FACT_LOG_FILENAME) for path in packet["fact_paths_written"])
