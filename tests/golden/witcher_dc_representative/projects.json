@@ -1,0 +1,43 @@
+{
+  "vault_root": "<VAULT_ROOT>",
+  "count": 1,
+  "projects": [
+    {
+      "project": "Witcher-DC",
+      "project_root": "<PROJECT_ROOT>",
+      "config_path": "<PROJECT_ROOT>\\writing-sidecar.yaml",
+      "state": "clean",
+      "stale": false,
+      "last_synced_at": "<TIMESTAMP>",
+      "last_checkpoint_at": "<TIMESTAMP>",
+      "operative_phase": "AUDIT",
+      "next_action": "Build the Atlantis fallout beats for Chapter 2.",
+      "assistant_ready": true,
+      "recommended_entrypoint": "writing-sidecar automate",
+      "recommended_routine": "repair-cycle",
+      "recommended_automate_command": "writing-sidecar automate \"<PROJECT_ROOT>\" --name recommended",
+      "recommended_automation_command": "writing-sidecar automate \"<PROJECT_ROOT>\" --name recommended --mode suggested-create",
+      "recommended_schedule_profile": "weekday-evening",
+      "continuity_state": "unknown",
+      "last_verified_at": null,
+      "finding_counts": {
+        "error": 0,
+        "warn": 0,
+        "info": 0
+      },
+      "verification_stale": true,
+      "fact_layer_ready": false,
+      "last_fact_sync_at": null,
+      "room_counts": {
+        "chat_process": 0,
+        "checkpoints": 1,
+        "brainstorms": 1,
+        "audits": 1,
+        "discarded_paths": 1,
+        "research": 1,
+        "archived_notes": 0
+      },
+      "reasons": []
+    }
+  ]
+}

@@ -1,0 +1,139 @@
+{
+  "project": "_project-template",
+  "project_root": "<PROJECT_ROOT>",
+  "vault_root": "<VAULT_ROOT>\\CDLC-Template",
+  "output_root": "<OUTPUT_ROOT>",
+  "palace_path": "<PALACE_ROOT>",
+  "runtime_root": "<RUNTIME_ROOT>",
+  "codex_home": "<CODEX_HOME>",
+  "config_path": "<PROJECT_ROOT>\\writing-sidecar.yaml",
+  "mempalace_version": "3.1.0",
+  "supported_spec": ">=3.1,<3.2",
+  "checks": [
+    {
+      "name": "mempalace_installed",
+      "status": "ok",
+      "detail": "MemPalace 3.1.0 is installed."
+    },
+    {
+      "name": "mempalace_version",
+      "status": "ok",
+      "detail": "Supported MemPalace version detected (3.1.0, expected >=3.1,<3.2)."
+    },
+    {
+      "name": "codex_home",
+      "status": "ok",
+      "path": "<CODEX_HOME>",
+      "detail": "Codex home was found."
+    },
+    {
+      "name": "output_root",
+      "status": "ok",
+      "path": "<OUTPUT_ROOT>",
+      "detail": "Writable."
+    },
+    {
+      "name": "palace_path",
+      "status": "ok",
+      "path": "<PALACE_ROOT>",
+      "detail": "Writable."
+    },
+    {
+      "name": "runtime_root",
+      "status": "ok",
+      "path": "<RUNTIME_ROOT>",
+      "detail": "Writable."
+    }
+  ],
+  "workflow_checks": [
+    {
+      "name": "writing_sidecar_config",
+      "status": "ok",
+      "path": "<PROJECT_ROOT>\\writing-sidecar.yaml",
+      "detail": "Present."
+    },
+    {
+      "name": "agents_gateway",
+      "status": "ok",
+      "path": "<PROJECT_ROOT>\\AGENTS.md",
+      "detail": "Present."
+    },
+    {
+      "name": "current_notes",
+      "status": "ok",
+      "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md",
+      "detail": "Present."
+    },
+    {
+      "name": "current_chapter_notes",
+      "status": "ok",
+      "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+      "detail": "Present."
+    },
+    {
+      "name": "logs_checkpoints",
+      "status": "ok",
+      "path": "<PROJECT_ROOT>\\logs\\checkpoints",
+      "detail": "Present."
+    },
+    {
+      "name": "logs_brainstorms",
+      "status": "fail",
+      "path": "<PROJECT_ROOT>\\logs\\brainstorms",
+      "detail": "Missing required workflow asset."
+    },
+    {
+      "name": "logs_audits",
+      "status": "fail",
+      "path": "<PROJECT_ROOT>\\logs\\audits",
+      "detail": "Missing required workflow asset."
+    },
+    {
+      "name": "logs_discarded_paths",
+      "status": "fail",
+      "path": "<PROJECT_ROOT>\\logs\\discarded_paths",
+      "detail": "Missing required workflow asset."
+    },
+    {
+      "name": "template_checkpoint",
+      "status": "ok",
+      "path": "<PROJECT_ROOT>\\logs\\templates\\checkpoint_snapshot.md",
+      "detail": "Present."
+    },
+    {
+      "name": "template_handoff",
+      "status": "ok",
+      "path": "<PROJECT_ROOT>\\logs\\templates\\chapter_handoff.md",
+      "detail": "Present."
+    },
+    {
+      "name": "template_audit",
+      "status": "ok",
+      "path": "<PROJECT_ROOT>\\logs\\templates\\audit_snapshot.md",
+      "detail": "Present."
+    },
+    {
+      "name": "template_discarded",
+      "status": "ok",
+      "path": "<PROJECT_ROOT>\\logs\\templates\\discarded_path.md",
+      "detail": "Present."
+    }
+  ],
+  "assistant_ready": false,
+  "recommended_entrypoint": "writing-sidecar automate",
+  "recommended_routine": "start-work",
+  "recommended_automate_command": "writing-sidecar automate \"<PROJECT_ROOT>\" --name recommended",
+  "recommended_automation_command": "writing-sidecar automate \"<PROJECT_ROOT>\" --name recommended --mode suggested-create",
+  "recommended_schedule_profile": "weekday-morning",
+  "continuity_state": "unknown",
+  "last_verified_at": null,
+  "finding_counts": {
+    "error": 0,
+    "warn": 0,
+    "info": 0
+  },
+  "verification_stale": true,
+  "fact_layer_ready": false,
+  "last_fact_sync_at": null,
+  "ok": false
+}

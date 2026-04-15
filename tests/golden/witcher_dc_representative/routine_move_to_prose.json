@@ -1,0 +1,321 @@
+{
+  "project": "Witcher-DC",
+  "project_root": "<PROJECT_ROOT>",
+  "vault_root": "<VAULT_ROOT>",
+  "routine": "move-to-prose",
+  "verify_mode": "advisory",
+  "state": "clean",
+  "stale": false,
+  "reasons": [],
+  "last_synced_at": "<TIMESTAMP>",
+  "operative_phase": "AUDIT",
+  "continuity_state": "clean",
+  "finding_counts": {
+    "error": 0,
+    "warn": 0,
+    "info": 0
+  },
+  "top_findings": [],
+  "fact_layer_state": "preview_only",
+  "fact_counts": {
+    "active": 23,
+    "retired": 0,
+    "add": 23,
+    "update": 0,
+    "delete": 0,
+    "none": 0,
+    "conflicts": 0
+  },
+  "fact_ops_preview": [
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "b18e37d594a1",
+      "category": "arc_state",
+      "subject": "Prime Earth Arrival / Darkseid Prelude",
+      "attribute": "identity",
+      "previous": null,
+      "proposed": {
+        "id": "b18e37d594a1",
+        "category": "arc_state",
+        "subject": "Prime Earth Arrival / Darkseid Prelude",
+        "attribute": "identity",
+        "value": "Prime Earth Arrival / Darkseid Prelude",
+        "status": "active",
+        "chapter": "2",
+        "arc": "Prime Earth Arrival / Darkseid Prelude",
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md",
+            "source": "current_notes",
+            "line": "identity: Prime Earth Arrival / Darkseid Prelude"
+          },
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "identity: Prime Earth Arrival / Darkseid Prelude"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md",
+          "source": "current_notes",
+          "line": "identity: Prime Earth Arrival / Darkseid Prelude"
+        },
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "identity: Prime Earth Arrival / Darkseid Prelude"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "146a86385475",
+      "category": "chapter_state",
+      "subject": "2",
+      "attribute": "working_title",
+      "previous": null,
+      "proposed": {
+        "id": "146a86385475",
+        "category": "chapter_state",
+        "subject": "2",
+        "attribute": "working_title",
+        "value": "Atlantis Fallout",
+        "status": "active",
+        "chapter": "2",
+        "arc": "Prime Earth Arrival / Darkseid Prelude",
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "working_title: Atlantis Fallout"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "working_title: Atlantis Fallout"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "5d855e1cca3f",
+      "category": "chapter_state",
+      "subject": "2",
+      "attribute": "phase",
+      "previous": null,
+      "proposed": {
+        "id": "5d855e1cca3f",
+        "category": "chapter_state",
+        "subject": "2",
+        "attribute": "phase",
+        "value": "SCRIPTING",
+        "status": "active",
+        "chapter": "2",
+        "arc": "Prime Earth Arrival / Darkseid Prelude",
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "phase: SCRIPTING"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "phase: SCRIPTING"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "d67f7db1200b",
+      "category": "chapter_state",
+      "subject": "2",
+      "attribute": "latest_score",
+      "previous": null,
+      "proposed": {
+        "id": "d67f7db1200b",
+        "category": "chapter_state",
+        "subject": "2",
+        "attribute": "latest_score",
+        "value": "88/100 (final cold audit after cleanup)",
+        "status": "active",
+        "chapter": "2",
+        "arc": "Prime Earth Arrival / Darkseid Prelude",
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "latest_score: 88/100 (final cold audit after cleanup)"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "latest_score: 88/100 (final cold audit after cleanup)"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "ffa89ea320cf",
+      "category": "chapter_state",
+      "subject": "2",
+      "attribute": "audit_status",
+      "previous": null,
+      "proposed": {
+        "id": "ffa89ea320cf",
+        "category": "chapter_state",
+        "subject": "2",
+        "attribute": "audit_status",
+        "value": "PASS",
+        "status": "active",
+        "chapter": "2",
+        "arc": "Prime Earth Arrival / Darkseid Prelude",
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "audit_status: PASS"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "audit_status: PASS"
+        }
+      ],
+      "recommended_action": "accept"
+    }
+  ],
+  "fact_conflicts": [],
+  "fact_highlights": [
+    "ADD arc_state/identity: Prime Earth Arrival / Darkseid Prelude",
+    "ADD chapter_state/working_title: 2",
+    "ADD chapter_state/phase: 2",
+    "ADD chapter_state/latest_score: 2",
+    "ADD chapter_state/audit_status: 2"
+  ],
+  "last_fact_sync_at": "<TIMESTAMP>",
+  "fact_layer_ready": false,
+  "doc_loadout": [
+    "_story_bible/00_AI_Writing_Rules.md",
+    "_story_bible/02B_Character_Quick_Reference.md",
+    "_story_bible/05_Current_Chapter_Notes.md"
+  ],
+  "file_targets": [
+    "<PROJECT_ROOT>\\_story_bible\\00_AI_Writing_Rules.md",
+    "<PROJECT_ROOT>\\_story_bible\\02B_Character_Quick_Reference.md",
+    "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+    "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md"
+  ],
+  "artifact_targets": [
+    "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-15_chapter-2_session_checkpoint.md"
+  ],
+  "recap_sections": {
+    "Continuity Watch": [
+      "Arthur sponsorship of Ciri \u2014 ACTIVE \u2014 He vouched for her intake and now owes answers",
+      "Bruce's anomaly investigation \u2014 ACTIVE \u2014 Passive Earth-side pressure should continue off-screen",
+      "Barry's timing-slip concern \u2014 ACTIVE \u2014 He knows something was wrong with the anomaly timing",
+      "Atlantis political pressure \u2014 ACTIVE \u2014 Mera, the physician, and palace channels are all involved",
+      "Darkseid's redirected search \u2014 ACTIVE \u2014 The search pressure is building off-screen"
+    ]
+  },
+  "steps": [
+    {
+      "name": "verify-chapter",
+      "kind": "verify",
+      "command": "writing-sidecar verify \"<VAULT_ROOT>\" --project Witcher-DC --scope chapter",
+      "status": "completed",
+      "write_capable": false,
+      "write_requested": false,
+      "summary": "chapter verification -> CLEAN (errors=0 warns=0 info=0)"
+    },
+    {
+      "name": "session-prose",
+      "kind": "session",
+      "command": "writing-sidecar session \"<PROJECT_ROOT>\" --task prose",
+      "status": "completed",
+      "write_capable": false,
+      "write_requested": false,
+      "summary": "prose packet -> AUDIT with 4 file target(s)"
+    },
+    {
+      "name": "write-pre-prose",
+      "kind": "write",
+      "command": "writing-sidecar session \"<PROJECT_ROOT>\" --task prose --write",
+      "status": "skipped",
+      "write_capable": true,
+      "write_requested": false,
+      "summary": "Preview only; rerun with --write to persist the bundle's sidecar-safe artifact(s)."
+    },
+    {
+      "name": "session-prose",
+      "kind": "session",
+      "command": "writing-sidecar session \"<PROJECT_ROOT>\" --task prose",
+      "status": "completed",
+      "write_capable": false,
+      "write_requested": false,
+      "summary": "prose packet -> AUDIT with 4 file target(s)"
+    }
+  ],
+  "recommended_actions": [
+    "Use this packet to decide whether prose should start now or whether structure/staging still needs one more pass.",
+    "Write the pre-prose checkpoint only when the draft really is about to begin.",
+    "Apply the explicit fact ops through a write-capable command when the preview looks right.",
+    "Open the suggested loadout before continuing.",
+    "Draft from live docs first and treat the continuity watch as advisory guardrails.",
+    "Move to writing-sidecar session \"<PROJECT_ROOT>\" --task audit once the prose pass exists.",
+    "Run writing-sidecar session \"<PROJECT_ROOT>\" --task prose --write when drafting starts or when the prose direction materially changes."
+  ],
+  "recommended_commands": [
+    "writing-sidecar routine \"<VAULT_ROOT>\" --project Witcher-DC --name move-to-prose --verify advisory --write",
+    "writing-sidecar session \"<PROJECT_ROOT>\" --task prose --write",
+    "writing-sidecar routine \"<VAULT_ROOT>\" --project Witcher-DC --name repair-cycle --verify advisory",
+    "writing-sidecar session \"<PROJECT_ROOT>\" --task audit"
+  ],
+  "write_performed": false,
+  "paths_written": [],
+  "sync_performed": false,
+  "warnings": []
+}

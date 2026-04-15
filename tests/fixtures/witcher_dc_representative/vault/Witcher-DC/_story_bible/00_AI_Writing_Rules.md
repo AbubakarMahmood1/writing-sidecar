@@ -1,0 +1,2 @@
+- Draft from live docs first.
+- Use sidecar memory only to preserve continuity.

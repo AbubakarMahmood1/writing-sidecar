@@ -1,0 +1,63 @@
+{
+  "project": "Witcher-DC",
+  "project_root": "<PROJECT_ROOT>",
+  "vault_root": "<VAULT_ROOT>",
+  "target": "codex",
+  "name": "recommended",
+  "routine": "repair-cycle",
+  "state": "clean",
+  "stale": false,
+  "reasons": [],
+  "last_synced_at": "<TIMESTAMP>",
+  "operative_phase": "AUDIT",
+  "continuity_state": "clean",
+  "finding_counts": {
+    "error": 0,
+    "warn": 0,
+    "info": 0
+  },
+  "top_findings": [],
+  "doc_loadout": [
+    "latest audit output",
+    "current chapter prose",
+    "only the rules needed for the dominant failure",
+    "_story_bible/96_Prose_Audit_Protocol.md",
+    "_story_bible/97_Editorial_Standards.md"
+  ],
+  "file_targets": [
+    "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md",
+    "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md"
+  ],
+  "artifact_targets": [
+    "<PROJECT_ROOT>\\logs\\audits\\2026-04-15_chapter-2_closeout_audit.md"
+  ],
+  "entry_command": "writing-sidecar routine \"<PROJECT_ROOT>\" --name repair-cycle --verify advisory",
+  "write_variant_command": "writing-sidecar routine \"<PROJECT_ROOT>\" --name repair-cycle --verify advisory --write",
+  "prompt": "You are resuming this writing project through the `repair-cycle` helper packet.\nLive docs outrank sidecar and checkpoint evidence whenever they disagree.\nDo not mutate canon or current-doc files, and do not perform silent writes.\nUse this exact command first: `writing-sidecar routine \"<PROJECT_ROOT>\" --name repair-cycle --verify advisory`\nIf you later want the sidecar-safe persisted version, use: `writing-sidecar routine \"<PROJECT_ROOT>\" --name repair-cycle --verify advisory --write`\nUse this packet to identify the dominant failure, set the repair direction, and keep rejected material cut unless evidence says otherwise.\nOpen these files first:\n- <PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md\n- <PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md\nNext phase-local command after this packet: `writing-sidecar session \"<PROJECT_ROOT>\" --task debug`\nUse the exact commands supplied by this helper packet instead of inventing new workflow steps.",
+  "expected_outputs": [
+    "An audit/debug helper packet that names the dominant failure and likely repair direction.",
+    "The exact audit-safe artifact target when you choose to persist the repair loop.",
+    "The debug-facing follow-up commands without silently writing cut-path artifacts."
+  ],
+  "recommended_actions": [
+    "Use the audit-loop bundle to identify the dominant failure, then use the debug packet to scope the repair instead of broad polish.",
+    "Write the audit artifact only after the dominant failure is explicit.",
+    "Apply the explicit fact ops through a write-capable command when the preview looks right.",
+    "Open the suggested loadout before continuing.",
+    "Move to writing-sidecar session \"<PROJECT_ROOT>\" --task debug --write when the dominant failure is clear.",
+    "Run writing-sidecar session \"<PROJECT_ROOT>\" --task debug --write to preserve the repair pass.",
+    "Add --note \"...\" if you reject a concrete structure and want it preserved in discarded_paths.",
+    "Return to writing-sidecar session \"<PROJECT_ROOT>\" --task audit after the dominant failure is repaired."
+  ],
+  "recommended_commands": [
+    "writing-sidecar routine \"<PROJECT_ROOT>\" --name repair-cycle --verify advisory",
+    "writing-sidecar routine \"<PROJECT_ROOT>\" --name repair-cycle --verify advisory --write",
+    "writing-sidecar routine \"<VAULT_ROOT>\" --project Witcher-DC --name repair-cycle --verify advisory --write",
+    "writing-sidecar session \"<PROJECT_ROOT>\" --task debug",
+    "writing-sidecar routine \"<VAULT_ROOT>\" --project Witcher-DC --name session-end --verify advisory",
+    "writing-sidecar session \"<PROJECT_ROOT>\" --task debug --write",
+    "writing-sidecar session \"<PROJECT_ROOT>\" --task debug --write --note \"rejected path summary\"",
+    "writing-sidecar session \"<PROJECT_ROOT>\" --task audit"
+  ],
+  "warnings": []
+}

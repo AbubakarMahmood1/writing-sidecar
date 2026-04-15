@@ -55,3 +55,6 @@ packages = ["src/writing_sidecar"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "live_vault: opt-in smoke tests against a real writing vault; disabled unless WRITING_SIDECAR_LIVE_VAULT is set",
+]

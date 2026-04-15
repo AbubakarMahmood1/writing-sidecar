@@ -1,0 +1,6 @@
+brainstorms:
+  - logs/brainstorms
+audits:
+  - logs/audits
+discarded_paths:
+  - logs/discarded_paths

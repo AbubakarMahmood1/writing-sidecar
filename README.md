@@ -68,6 +68,31 @@ Structured output is available on:
 - `routine --format json`
 - `automate --format json`
 
+## Regression Harness
+
+`writing-sidecar` now ships with a source-controlled self-policing harness instead of relying on eyeballing output drift.
+
+- representative fixture vaults live under `tests/fixtures/`
+- normalized golden snapshots live under `tests/golden/`
+- JSON contracts cover `doctor`, `projects`, `verify`, `session`, `bundle`, `routine`, and `automate`
+- fact-noise budgets keep the secondary fact layer from quietly bloating
+- preview/write-boundary tests make sure read commands stay preview-only and write commands only touch sidecar-owned fact files
+
+Run the default suite with:
+
+```bash
+python -m pytest -q
+```
+
+Optional live-vault smoke tests stay local-only and opt-in:
+
+```bash
+$env:WRITING_SIDECAR_LIVE_VAULT=1
+python -m pytest tests/acceptance/test_live_vault_smoke.py -q
+```
+
+If you want to point at a different real vault path, set `WRITING_SIDECAR_LIVE_VAULT` to that absolute path instead of `1`.
+
 ## What It Does
 
 - exports sidecar-safe process memory into fixed rooms

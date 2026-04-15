@@ -1,0 +1,101 @@
+{
+  "project": "_project-template",
+  "project_root": "<PROJECT_ROOT>",
+  "vault_root": "<VAULT_ROOT>\\CDLC-Template",
+  "target": "codex",
+  "name": "recommended",
+  "routine": "start-work",
+  "state": "not_built",
+  "stale": true,
+  "reasons": [
+    {
+      "reason": "manifest_missing"
+    },
+    {
+      "reason": "palace_missing"
+    }
+  ],
+  "last_synced_at": null,
+  "operative_phase": "BRAINDUMP",
+  "continuity_state": "warn",
+  "finding_counts": {
+    "error": 0,
+    "warn": 2,
+    "info": 0
+  },
+  "top_findings": [
+    {
+      "id": "<FINDING_ID:handoff_stale>",
+      "severity": "warn",
+      "kind": "handoff_stale",
+      "title": "No handoff artifact exists yet",
+      "summary": "There is no brainstorm/handoff artifact capturing the carry-forward session state.",
+      "sources": [
+        "<PROJECT_ROOT>\\logs\\brainstorms"
+      ],
+      "evidence": [
+        "No handoff file was found under logs/brainstorms/."
+      ],
+      "suggested_fix": "Write a handoff artifact before the next session transition or closeout."
+    },
+    {
+      "id": "<FINDING_ID:carry_forward_gap>",
+      "severity": "warn",
+      "kind": "carry_forward_gap",
+      "title": "Artifact carry-forward lines are missing from the active live docs",
+      "summary": "Recent checkpoint/handoff/audit/discarded artifacts mention carry-forward material that is not clearly visible in the active live docs.",
+      "sources": [
+        "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-12_template_checkpoint.md"
+      ],
+      "evidence": [
+        "Example carry-forward thread"
+      ],
+      "suggested_fix": "Move the still-active carry-forward threads or guardrails into the live current docs so the next session does not rely on artifacts alone."
+    }
+  ],
+  "doc_loadout": [
+    "_story_bible/05_Current_Notes.md",
+    "_story_bible/05_Current_Chapter_Notes.md",
+    "_story_bible/04_Ideas_and_Future.md"
+  ],
+  "file_targets": [
+    "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md",
+    "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md"
+  ],
+  "artifact_targets": [
+    "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-15_chapter-1_session_checkpoint.md"
+  ],
+  "entry_command": "writing-sidecar routine \"<PROJECT_ROOT>\" --name start-work --verify advisory --sync never",
+  "write_variant_command": "writing-sidecar routine \"<PROJECT_ROOT>\" --name start-work --verify advisory --sync never --write",
+  "prompt": "You are resuming this writing project through the `start-work` helper packet.\nLive docs outrank sidecar and checkpoint evidence whenever they disagree.\nDo not mutate canon or current-doc files, and do not perform silent writes.\nUse this exact command first: `writing-sidecar routine \"<PROJECT_ROOT>\" --name start-work --verify advisory --sync never`\nIf you later want the sidecar-safe persisted version, use: `writing-sidecar routine \"<PROJECT_ROOT>\" --name start-work --verify advisory --sync never --write`\nOpen the listed live docs first, then move into the phase-local session command once re-entry is stable.\nOpen these files first:\n- <PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md\n- <PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md\nContinuity findings worth caring about now:\n- [WARN] No handoff artifact exists yet: There is no brainstorm/handoff artifact capturing the carry-forward session state.\n- [WARN] Artifact carry-forward lines are missing from the active live docs: Recent checkpoint/handoff/audit/discarded artifacts mention carry-forward material that is not clearly visible in the active live docs.\nNext phase-local command after this packet: `writing-sidecar session \"<PROJECT_ROOT>\" --task braindump --write`\nUse the exact commands supplied by this helper packet instead of inventing new workflow steps.",
+  "expected_outputs": [
+    "A clean re-entry packet with the exact files to open first.",
+    "The next phase-local session command once startup is complete.",
+    "A separate checkpoint write command if you want to persist the restart state."
+  ],
+  "recommended_actions": [
+    "Use the startup bundle for re-entry, then move straight into the live phase packet instead of juggling commands manually.",
+    "Persist the startup checkpoint once real work begins so the next session does not have to reconstruct context from scratch.",
+    "Write a handoff artifact before the next session transition or closeout.",
+    "Move the still-active carry-forward threads or guardrails into the live current docs so the next session does not rely on artifacts alone.",
+    "Apply the explicit fact ops through a write-capable command when the preview looks right.",
+    "Open the suggested loadout before continuing.",
+    "Continue with writing-sidecar session \"<PROJECT_ROOT>\" --task braindump --write when you move into the next real task.",
+    "Use lower-level search, context, or recap only when the session packet is too broad or too thin.",
+    "Run writing-sidecar session \"<PROJECT_ROOT>\" --task braindump --write to preserve the current phase state.",
+    "Move to writing-sidecar session \"<PROJECT_ROOT>\" --task scripting once this phase is actually stable.",
+    "Keep live docs authoritative and use sidecar evidence only to preserve process memory and rejected options."
+  ],
+  "recommended_commands": [
+    "writing-sidecar routine \"<PROJECT_ROOT>\" --name start-work --verify advisory --sync never",
+    "writing-sidecar routine \"<PROJECT_ROOT>\" --name start-work --verify advisory --sync never --write",
+    "writing-sidecar routine \"<PROJECT_ROOT>\" --name start-work --verify advisory --write",
+    "writing-sidecar session \"<PROJECT_ROOT>\" --task braindump --write",
+    "writing-sidecar session \"<PROJECT_ROOT>\" --task scripting"
+  ],
+  "warnings": [
+    "sidecar is stale; skipping rebuild because --sync never was used.",
+    "No sidecar palace exists yet. Run writing-sidecar sync if this task depends on sidecar retrieval.",
+    "sidecar is stale; verification findings that depend on sidecar memory may be incomplete."
+  ]
+}

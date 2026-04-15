@@ -1,0 +1,316 @@
+{
+  "project": "_project-template",
+  "project_root": "<PROJECT_ROOT>",
+  "vault_root": "<VAULT_ROOT>\\CDLC-Template",
+  "scope": "startup",
+  "state": "warn",
+  "verified_at": "<TIMESTAMP>",
+  "last_synced_at": null,
+  "finding_counts": {
+    "error": 0,
+    "warn": 2,
+    "info": 0
+  },
+  "findings": [
+    {
+      "id": "<FINDING_ID:handoff_stale>",
+      "severity": "warn",
+      "kind": "handoff_stale",
+      "title": "No handoff artifact exists yet",
+      "summary": "There is no brainstorm/handoff artifact capturing the carry-forward session state.",
+      "sources": [
+        "<PROJECT_ROOT>\\logs\\brainstorms"
+      ],
+      "evidence": [
+        "No handoff file was found under logs/brainstorms/."
+      ],
+      "suggested_fix": "Write a handoff artifact before the next session transition or closeout."
+    },
+    {
+      "id": "<FINDING_ID:carry_forward_gap>",
+      "severity": "warn",
+      "kind": "carry_forward_gap",
+      "title": "Artifact carry-forward lines are missing from the active live docs",
+      "summary": "Recent checkpoint/handoff/audit/discarded artifacts mention carry-forward material that is not clearly visible in the active live docs.",
+      "sources": [
+        "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-12_template_checkpoint.md"
+      ],
+      "evidence": [
+        "Example carry-forward thread"
+      ],
+      "suggested_fix": "Move the still-active carry-forward threads or guardrails into the live current docs so the next session does not rely on artifacts alone."
+    }
+  ],
+  "warnings": [
+    "sidecar is stale; skipping rebuild because --sync never was used.",
+    "No sidecar palace exists yet. Run writing-sidecar sync if this task depends on sidecar retrieval.",
+    "sidecar is stale; verification findings that depend on sidecar memory may be incomplete."
+  ],
+  "recommended_actions": [
+    "Write a handoff artifact before the next session transition or closeout.",
+    "Move the still-active carry-forward threads or guardrails into the live current docs so the next session does not rely on artifacts alone.",
+    "Apply the explicit fact ops through a write-capable command when the preview looks right."
+  ],
+  "query_packets": [],
+  "source_snapshot": [
+    {
+      "path": "<OUTPUT_ROOT>\\.writing-sidecar-state.json",
+      "type": "missing",
+      "size": null,
+      "mtime": null,
+      "sha256": null,
+      "entries": 0
+    },
+    {
+      "size": 100,
+      "mtime": "<MTIME>",
+      "sha256": "<SHA256>",
+      "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md",
+      "type": "file",
+      "entries": 1
+    },
+    {
+      "size": 144,
+      "mtime": "<MTIME>",
+      "sha256": "<SHA256>",
+      "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+      "type": "file",
+      "entries": 1
+    },
+    {
+      "size": 57,
+      "mtime": "<MTIME>",
+      "sha256": "<SHA256>",
+      "path": "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-12_template_checkpoint.md",
+      "type": "file",
+      "entries": 1
+    },
+    {
+      "path": "<PROJECT_ROOT>\\logs\\brainstorms",
+      "type": "missing",
+      "size": null,
+      "mtime": null,
+      "sha256": null,
+      "entries": 0
+    }
+  ],
+  "cache_path": "<OUTPUT_ROOT>\\.writing-sidecar-verify.json",
+  "sync_summary": null,
+  "synced": false,
+  "fact_layer_state": "preview_only",
+  "fact_counts": {
+    "active": 7,
+    "retired": 0,
+    "add": 7,
+    "update": 0,
+    "delete": 0,
+    "none": 0,
+    "conflicts": 0
+  },
+  "fact_ops_preview": [
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "bf11a5b3797d",
+      "category": "chapter_state",
+      "subject": "1",
+      "attribute": "phase",
+      "previous": null,
+      "proposed": {
+        "id": "bf11a5b3797d",
+        "category": "chapter_state",
+        "subject": "1",
+        "attribute": "phase",
+        "value": "BRAINDUMP",
+        "status": "active",
+        "chapter": "1",
+        "arc": null,
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "phase: BRAINDUMP"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "phase: BRAINDUMP"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "77ae42436379",
+      "category": "chapter_state",
+      "subject": "current chapter",
+      "attribute": "identity",
+      "previous": null,
+      "proposed": {
+        "id": "77ae42436379",
+        "category": "chapter_state",
+        "subject": "current chapter",
+        "attribute": "identity",
+        "value": "1",
+        "status": "active",
+        "chapter": "1",
+        "arc": null,
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "identity: 1"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "identity: 1"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "7a156d2760fa",
+      "category": "continuity_thread",
+      "subject": "Example carry-forward thread",
+      "attribute": "status",
+      "previous": null,
+      "proposed": {
+        "id": "7a156d2760fa",
+        "category": "continuity_thread",
+        "subject": "Example carry-forward thread",
+        "attribute": "status",
+        "value": "active",
+        "status": "active",
+        "chapter": "1",
+        "arc": null,
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-12_template_checkpoint.md",
+            "source": "latest_checkpoint",
+            "line": "Example carry-forward thread"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 0.85,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-12_template_checkpoint.md",
+          "source": "latest_checkpoint",
+          "line": "Example carry-forward thread"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "ac620d39806d",
+      "category": "guardrail",
+      "subject": "Avoid placeholder vibes in the actual draft.",
+      "attribute": "guardrail",
+      "previous": null,
+      "proposed": {
+        "id": "ac620d39806d",
+        "category": "guardrail",
+        "subject": "Avoid placeholder vibes in the actual draft.",
+        "attribute": "guardrail",
+        "value": "active",
+        "status": "active",
+        "chapter": "1",
+        "arc": null,
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "Avoid placeholder vibes in the actual draft.",
+            "section": "Guardrails"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": "Guardrails"
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "Avoid placeholder vibes in the actual draft.",
+          "section": "Guardrails"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "ccc490a04782",
+      "category": "guardrail",
+      "subject": "Keep the opening pressure explicit.",
+      "attribute": "guardrail",
+      "previous": null,
+      "proposed": {
+        "id": "ccc490a04782",
+        "category": "guardrail",
+        "subject": "Keep the opening pressure explicit.",
+        "attribute": "guardrail",
+        "value": "active",
+        "status": "active",
+        "chapter": "1",
+        "arc": null,
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "Keep the opening pressure explicit.",
+            "section": "Guardrails"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": "Guardrails"
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "Keep the opening pressure explicit.",
+          "section": "Guardrails"
+        }
+      ],
+      "recommended_action": "accept"
+    }
+  ],
+  "fact_conflicts": [],
+  "fact_highlights": [
+    "ADD chapter_state/phase: 1",
+    "ADD chapter_state/identity: current chapter",
+    "ADD continuity_thread/status: Example carry-forward thread",
+    "ADD guardrail/guardrail: Avoid placeholder vibes in the actual draft.",
+    "ADD guardrail/guardrail: Keep the opening pressure explicit."
+  ],
+  "last_fact_sync_at": "<TIMESTAMP>",
+  "fact_layer_ready": false
+}

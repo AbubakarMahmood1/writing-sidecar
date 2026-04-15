@@ -1,0 +1,42 @@
+{
+  "vault_root": "<VAULT_ROOT>",
+  "count": 1,
+  "projects": [
+    {
+      "project": "_project-template",
+      "project_root": "<PROJECT_ROOT>",
+      "config_path": "<PROJECT_ROOT>\\writing-sidecar.yaml",
+      "state": "not_built",
+      "stale": true,
+      "last_synced_at": null,
+      "last_checkpoint_at": "<TIMESTAMP>",
+      "operative_phase": "BRAINDUMP",
+      "next_action": "Define the opening pressure and project promise.",
+      "assistant_ready": false,
+      "recommended_entrypoint": "writing-sidecar automate",
+      "recommended_routine": "start-work",
+      "recommended_automate_command": "writing-sidecar automate \"<PROJECT_ROOT>\" --name recommended",
+      "recommended_automation_command": "writing-sidecar automate \"<PROJECT_ROOT>\" --name recommended --mode suggested-create",
+      "recommended_schedule_profile": "weekday-morning",
+      "continuity_state": "unknown",
+      "last_verified_at": null,
+      "finding_counts": {
+        "error": 0,
+        "warn": 0,
+        "info": 0
+      },
+      "verification_stale": true,
+      "fact_layer_ready": false,
+      "last_fact_sync_at": null,
+      "room_counts": {},
+      "reasons": [
+        {
+          "reason": "manifest_missing"
+        },
+        {
+          "reason": "palace_missing"
+        }
+      ]
+    }
+  ]
+}

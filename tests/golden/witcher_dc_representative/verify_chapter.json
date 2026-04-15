@@ -1,0 +1,338 @@
+{
+  "project": "Witcher-DC",
+  "project_root": "<PROJECT_ROOT>",
+  "vault_root": "<VAULT_ROOT>",
+  "scope": "chapter",
+  "state": "clean",
+  "verified_at": "<TIMESTAMP>",
+  "last_synced_at": "<TIMESTAMP>",
+  "finding_counts": {
+    "error": 0,
+    "warn": 0,
+    "info": 0
+  },
+  "findings": [],
+  "warnings": [],
+  "recommended_actions": [
+    "Apply the explicit fact ops through a write-capable command when the preview looks right."
+  ],
+  "query_packets": [
+    {
+      "query": "Atlantis political pressure",
+      "wing": "witcher_dc_writing_sidecar",
+      "mode": "planning",
+      "room_order": [
+        "checkpoints",
+        "brainstorms",
+        "discarded_paths",
+        "audits",
+        "chat_process"
+      ],
+      "results": []
+    },
+    {
+      "query": "Arthur sponsorship of Ciri",
+      "wing": "witcher_dc_writing_sidecar",
+      "mode": "history",
+      "room_order": [
+        "checkpoints",
+        "audits",
+        "brainstorms",
+        "discarded_paths",
+        "chat_process"
+      ],
+      "results": []
+    }
+  ],
+  "source_snapshot": [
+    {
+      "size": 4908,
+      "mtime": "<MTIME>",
+      "sha256": "<SHA256>",
+      "path": "<OUTPUT_ROOT>\\.writing-sidecar-state.json",
+      "type": "file",
+      "entries": 1
+    },
+    {
+      "size": 284,
+      "mtime": "<MTIME>",
+      "sha256": "<SHA256>",
+      "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md",
+      "type": "file",
+      "entries": 1
+    },
+    {
+      "size": 1033,
+      "mtime": "<MTIME>",
+      "sha256": "<SHA256>",
+      "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+      "type": "file",
+      "entries": 1
+    },
+    {
+      "path": "<PROJECT_ROOT>\\_story_bible\\01_Story_So_Far.md",
+      "type": "missing",
+      "size": null,
+      "mtime": null,
+      "sha256": null,
+      "entries": 0
+    },
+    {
+      "size": 521,
+      "mtime": "<MTIME>",
+      "sha256": "<SHA256>",
+      "path": "<PROJECT_ROOT>\\_story_bible\\02C_Character_State_Tracker.md",
+      "type": "file",
+      "entries": 1
+    },
+    {
+      "size": 367,
+      "mtime": "<MTIME>",
+      "sha256": "<SHA256>",
+      "path": "<PROJECT_ROOT>\\_story_bible\\06_Timeline.md",
+      "type": "file",
+      "entries": 1
+    },
+    {
+      "size": 462,
+      "mtime": "<MTIME>",
+      "sha256": "<SHA256>",
+      "path": "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-15_chapter-1_session_checkpoint.md",
+      "type": "file",
+      "entries": 1
+    },
+    {
+      "size": 278,
+      "mtime": "<MTIME>",
+      "sha256": "<SHA256>",
+      "path": "<PROJECT_ROOT>\\logs\\brainstorms\\2026-04-09_chapter-2_atlantis-fallout_handoff.md",
+      "type": "file",
+      "entries": 1
+    }
+  ],
+  "cache_path": "<OUTPUT_ROOT>\\.writing-sidecar-verify.json",
+  "sync_summary": null,
+  "synced": false,
+  "fact_layer_state": "preview_only",
+  "fact_counts": {
+    "active": 23,
+    "retired": 0,
+    "add": 23,
+    "update": 0,
+    "delete": 0,
+    "none": 0,
+    "conflicts": 0
+  },
+  "fact_ops_preview": [
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "b18e37d594a1",
+      "category": "arc_state",
+      "subject": "Prime Earth Arrival / Darkseid Prelude",
+      "attribute": "identity",
+      "previous": null,
+      "proposed": {
+        "id": "b18e37d594a1",
+        "category": "arc_state",
+        "subject": "Prime Earth Arrival / Darkseid Prelude",
+        "attribute": "identity",
+        "value": "Prime Earth Arrival / Darkseid Prelude",
+        "status": "active",
+        "chapter": "2",
+        "arc": "Prime Earth Arrival / Darkseid Prelude",
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md",
+            "source": "current_notes",
+            "line": "identity: Prime Earth Arrival / Darkseid Prelude"
+          },
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "identity: Prime Earth Arrival / Darkseid Prelude"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md",
+          "source": "current_notes",
+          "line": "identity: Prime Earth Arrival / Darkseid Prelude"
+        },
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "identity: Prime Earth Arrival / Darkseid Prelude"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "146a86385475",
+      "category": "chapter_state",
+      "subject": "2",
+      "attribute": "working_title",
+      "previous": null,
+      "proposed": {
+        "id": "146a86385475",
+        "category": "chapter_state",
+        "subject": "2",
+        "attribute": "working_title",
+        "value": "Atlantis Fallout",
+        "status": "active",
+        "chapter": "2",
+        "arc": "Prime Earth Arrival / Darkseid Prelude",
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "working_title: Atlantis Fallout"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "working_title: Atlantis Fallout"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "5d855e1cca3f",
+      "category": "chapter_state",
+      "subject": "2",
+      "attribute": "phase",
+      "previous": null,
+      "proposed": {
+        "id": "5d855e1cca3f",
+        "category": "chapter_state",
+        "subject": "2",
+        "attribute": "phase",
+        "value": "SCRIPTING",
+        "status": "active",
+        "chapter": "2",
+        "arc": "Prime Earth Arrival / Darkseid Prelude",
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "phase: SCRIPTING"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "phase: SCRIPTING"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "d67f7db1200b",
+      "category": "chapter_state",
+      "subject": "2",
+      "attribute": "latest_score",
+      "previous": null,
+      "proposed": {
+        "id": "d67f7db1200b",
+        "category": "chapter_state",
+        "subject": "2",
+        "attribute": "latest_score",
+        "value": "88/100 (final cold audit after cleanup)",
+        "status": "active",
+        "chapter": "2",
+        "arc": "Prime Earth Arrival / Darkseid Prelude",
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "latest_score: 88/100 (final cold audit after cleanup)"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "latest_score: 88/100 (final cold audit after cleanup)"
+        }
+      ],
+      "recommended_action": "accept"
+    },
+    {
+      "timestamp": "<TIMESTAMP>",
+      "operation": "ADD",
+      "fact_id": "ffa89ea320cf",
+      "category": "chapter_state",
+      "subject": "2",
+      "attribute": "audit_status",
+      "previous": null,
+      "proposed": {
+        "id": "ffa89ea320cf",
+        "category": "chapter_state",
+        "subject": "2",
+        "attribute": "audit_status",
+        "value": "PASS",
+        "status": "active",
+        "chapter": "2",
+        "arc": "Prime Earth Arrival / Darkseid Prelude",
+        "sources": [
+          {
+            "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+            "source": "current_chapter_notes",
+            "line": "audit_status: PASS"
+          }
+        ],
+        "updated_at": "<TIMESTAMP>",
+        "confidence": 1.0,
+        "notes": null
+      },
+      "reason": "New explicit fact extracted from the current source set.",
+      "sources": [
+        {
+          "path": "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md",
+          "source": "current_chapter_notes",
+          "line": "audit_status: PASS"
+        }
+      ],
+      "recommended_action": "accept"
+    }
+  ],
+  "fact_conflicts": [],
+  "fact_highlights": [
+    "ADD arc_state/identity: Prime Earth Arrival / Darkseid Prelude",
+    "ADD chapter_state/working_title: 2",
+    "ADD chapter_state/phase: 2",
+    "ADD chapter_state/latest_score: 2",
+    "ADD chapter_state/audit_status: 2"
+  ],
+  "last_fact_sync_at": "<TIMESTAMP>",
+  "fact_layer_ready": false
+}
