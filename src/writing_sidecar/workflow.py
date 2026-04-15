@@ -39,6 +39,10 @@ DEFAULT_SIDECAR_PALACE_DIRNAME = ".palaces"
 DEFAULT_RUNTIME_DIRNAME = ".mempalace-sidecar-runtime"
 STATE_FILENAME = ".writing-sidecar-state.json"
 VERIFY_CACHE_FILENAME = ".writing-sidecar-verify.json"
+FACTS_DIRNAME = "facts"
+FACTS_SNAPSHOT_FILENAME = "facts_snapshot.json"
+FACT_LOG_FILENAME = "fact_log.jsonl"
+FACT_PREVIEW_FILENAME = "reconcile_preview.json"
 STATE_VERSION = 1
 SEARCH_MODE_ROOMS = {
     "planning": ("checkpoints", "brainstorms", "discarded_paths", "audits", "chat_process"),
@@ -178,6 +182,28 @@ VERIFY_SCOPE_SOURCE_KEYS = {
         "latest_discarded",
     ),
 }
+FACT_SOURCE_PRIORITY = {
+    "current_notes": 0,
+    "current_chapter_notes": 0,
+    "state_tracker": 1,
+    "timeline": 1,
+    "story_so_far": 2,
+    "latest_checkpoint": 3,
+    "latest_handoff": 3,
+    "latest_audit": 4,
+    "latest_discarded": 4,
+}
+FACT_CATEGORY_ORDER = (
+    "project_state",
+    "chapter_state",
+    "arc_state",
+    "character_state",
+    "relationship_state",
+    "continuity_thread",
+    "locked_decision",
+    "guardrail",
+    "timeline_fact",
+)
 PHASE_LOADOUT = {
     "BRAINDUMP": [
         "_story_bible/05_Current_Notes.md",
@@ -1374,6 +1400,7 @@ def list_writing_projects(vault_dir: str) -> dict:
         next_action = _extract_field(doc_bundle, "next_action")
         workflow_checks = _collect_workflow_checks(Path(status["project_root"]))
         verification = _cached_verification_summary(Path(status["output_root"]))
+        fact_summary = _cached_fact_layer_summary(Path(status["output_root"]))
         recommendations = _workflow_recommendations(
             project_root=status["project_root"],
             state=status["state"],
@@ -1406,6 +1433,8 @@ def list_writing_projects(vault_dir: str) -> dict:
                 "last_verified_at": verification["last_verified_at"],
                 "finding_counts": verification["finding_counts"],
                 "verification_stale": verification["verification_stale"],
+                "fact_layer_ready": fact_summary["fact_layer_ready"],
+                "last_fact_sync_at": fact_summary["last_fact_sync_at"],
                 "room_counts": status.get("room_counts", {}),
                 "reasons": status.get("stale_reasons", []),
             }
@@ -1458,6 +1487,9 @@ def print_writing_projects(report: dict):
             print(f"    Checkpoint: {item['last_checkpoint_at']}")
         if item.get("last_verified_at"):
             print(f"    Verified: {item['last_verified_at']}")
+        if item.get("last_fact_sync_at"):
+            print(f"    Facts:  {item['last_fact_sync_at']}")
+        print(f"    Facts ready: {'YES' if item.get('fact_layer_ready') else 'NO'}")
         if item.get("reasons"):
             print("    Reasons:")
             for reason in item["reasons"]:
@@ -1960,7 +1992,41 @@ def build_writing_session(
     final_status["finding_counts"] = verification["finding_counts"]
     final_status["top_findings"] = verification["findings"][:3]
     final_status["recommended_repairs"] = verification["recommended_actions"][:5]
+    latest_fact_report = next(
+        (
+            report
+            for report in reversed(write_reports)
+            if report.get("fact_layer_state")
+        ),
+        None,
+    )
+    fact_source = latest_fact_report or verification
+    final_status["fact_layer_state"] = fact_source.get("fact_layer_state", "missing")
+    final_status["fact_counts"] = fact_source.get(
+        "fact_counts",
+        {
+            "active": 0,
+            "retired": 0,
+            "add": 0,
+            "update": 0,
+            "delete": 0,
+            "none": 0,
+            "conflicts": 0,
+        },
+    )
+    final_status["fact_ops_preview"] = list(fact_source.get("fact_ops_preview", []))
+    final_status["fact_conflicts"] = list(fact_source.get("fact_conflicts", []))
+    final_status["fact_highlights"] = list(fact_source.get("fact_highlights", []))
+    final_status["last_fact_sync_at"] = fact_source.get("last_fact_sync_at")
+    final_status["fact_layer_ready"] = bool(fact_source.get("fact_layer_ready"))
+    final_status["fact_write_performed"] = bool(
+        latest_fact_report and latest_fact_report.get("fact_write_performed")
+    )
+    final_status["fact_paths_written"] = [
+        path for report in write_reports for path in report.get("fact_paths_written", [])
+    ]
     final_status["warnings"] = _unique_lines(final_status["warnings"] + verification.get("warnings", []))
+    final_status["warnings"] = _unique_lines(final_status["warnings"] + list((fact_source or {}).get("warnings", [])))
 
     return final_status
 
@@ -2004,6 +2070,24 @@ def render_writing_session(session_data: dict) -> str:
             lines.append("    Repairs:")
             for item in session_data["recommended_repairs"][:3]:
                 lines.append(f"      - {item}")
+    if session_data.get("fact_layer_state"):
+        fact_counts = session_data.get("fact_counts") or {}
+        lines.append(
+            "\n  Fact layer: "
+            f"{str(session_data.get('fact_layer_state', 'missing')).upper()} "
+            f"(add={fact_counts.get('add', 0)} update={fact_counts.get('update', 0)} "
+            f"delete={fact_counts.get('delete', 0)} conflicts={fact_counts.get('conflicts', 0)})"
+        )
+        if session_data.get("last_fact_sync_at"):
+            lines.append(f"    Last sync: {session_data['last_fact_sync_at']}")
+    if session_data.get("fact_highlights"):
+        lines.append("\n  Fact highlights:")
+        for item in session_data["fact_highlights"][:5]:
+            lines.append(f"    - {item}")
+    if session_data.get("fact_conflicts"):
+        lines.append("\n  Fact conflicts:")
+        for item in session_data["fact_conflicts"][:3]:
+            lines.append(f"    - {item['category']}/{item['attribute']}: {item['subject']}")
 
     if session_data.get("recommended_actions"):
         lines.append("\n  Recommended actions:")
@@ -2235,6 +2319,26 @@ def _bundle_verification_report_for_session(bundle_packet: dict) -> dict:
         "findings": list(bundle_packet.get("top_findings", [])),
         "recommended_actions": list(bundle_packet.get("recommended_actions", [])),
         "warnings": list(bundle_packet.get("warnings", [])),
+        "fact_layer_state": bundle_packet.get("fact_layer_state", "missing"),
+        "fact_counts": dict(
+            bundle_packet.get(
+                "fact_counts",
+                {
+                    "active": 0,
+                    "retired": 0,
+                    "add": 0,
+                    "update": 0,
+                    "delete": 0,
+                    "none": 0,
+                    "conflicts": 0,
+                },
+            )
+        ),
+        "fact_ops_preview": list(bundle_packet.get("fact_ops_preview", [])),
+        "fact_conflicts": list(bundle_packet.get("fact_conflicts", [])),
+        "fact_highlights": list(bundle_packet.get("fact_highlights", [])),
+        "last_fact_sync_at": bundle_packet.get("last_fact_sync_at"),
+        "fact_layer_ready": bool(bundle_packet.get("fact_layer_ready")),
     }
 
 
@@ -2648,6 +2752,24 @@ def build_writing_bundle(
         "continuity_state": verification_report.get("state", "unknown"),
         "finding_counts": verification_report.get("finding_counts", {"error": 0, "warn": 0, "info": 0}),
         "top_findings": verification_report.get("findings", [])[:3],
+        "fact_layer_state": verification_report.get("fact_layer_state", "missing"),
+        "fact_counts": verification_report.get(
+            "fact_counts",
+            {
+                "active": 0,
+                "retired": 0,
+                "add": 0,
+                "update": 0,
+                "delete": 0,
+                "none": 0,
+                "conflicts": 0,
+            },
+        ),
+        "fact_ops_preview": verification_report.get("fact_ops_preview", [])[:5],
+        "fact_conflicts": verification_report.get("fact_conflicts", [])[:5],
+        "fact_highlights": verification_report.get("fact_highlights", [])[:5],
+        "last_fact_sync_at": verification_report.get("last_fact_sync_at"),
+        "fact_layer_ready": verification_report.get("fact_layer_ready", False),
         "doc_loadout": doc_loadout,
         "file_targets": file_targets,
         "artifact_targets": _bundle_top_level_artifact_targets(name, effective_primary),
@@ -2884,6 +3006,26 @@ def build_writing_routine(
         "continuity_state": bundle_packet.get("continuity_state"),
         "finding_counts": dict(bundle_packet.get("finding_counts", {"error": 0, "warn": 0, "info": 0})),
         "top_findings": list(bundle_packet.get("top_findings", [])),
+        "fact_layer_state": bundle_packet.get("fact_layer_state", "missing"),
+        "fact_counts": dict(
+            bundle_packet.get(
+                "fact_counts",
+                {
+                    "active": 0,
+                    "retired": 0,
+                    "add": 0,
+                    "update": 0,
+                    "delete": 0,
+                    "none": 0,
+                    "conflicts": 0,
+                },
+            )
+        ),
+        "fact_ops_preview": list(bundle_packet.get("fact_ops_preview", [])),
+        "fact_conflicts": list(bundle_packet.get("fact_conflicts", [])),
+        "fact_highlights": list(bundle_packet.get("fact_highlights", [])),
+        "last_fact_sync_at": bundle_packet.get("last_fact_sync_at"),
+        "fact_layer_ready": bundle_packet.get("fact_layer_ready", False),
         "doc_loadout": doc_loadout,
         "file_targets": file_targets,
         "artifact_targets": artifact_targets,
@@ -3598,6 +3740,16 @@ def maintain_writing_sidecar(
             )
 
     source_inputs = _summarize_maintenance_sources(doc_bundle, artifacts, clean_notes)
+    fact_report = None
+    if write:
+        fact_report = _build_fact_layer_report(
+            status,
+            _build_verify_source_bundle(project_root, _load_live_doc_bundle(project_root)),
+            scope="full",
+            apply=True,
+            write_preview=True,
+        )
+        warnings.extend(fact_report.get("warnings", []))
 
     return {
         "project": status["project"],
@@ -3619,6 +3771,26 @@ def maintain_writing_sidecar(
             artifact["kind"]: list(artifact["sections"].keys()) for artifact in artifacts
         },
         "artifacts": artifacts,
+        "fact_layer_state": (fact_report or {}).get("fact_layer_state", "missing"),
+        "fact_counts": (fact_report or {}).get(
+            "fact_counts",
+            {
+                "active": 0,
+                "retired": 0,
+                "add": 0,
+                "update": 0,
+                "delete": 0,
+                "none": 0,
+                "conflicts": 0,
+            },
+        ),
+        "fact_ops_preview": (fact_report or {}).get("fact_ops_preview", []),
+        "fact_conflicts": (fact_report or {}).get("fact_conflicts", []),
+        "fact_highlights": (fact_report or {}).get("fact_highlights", []),
+        "last_fact_sync_at": (fact_report or {}).get("last_fact_sync_at"),
+        "fact_layer_ready": (fact_report or {}).get("fact_layer_ready", False),
+        "fact_write_performed": (fact_report or {}).get("fact_write_performed", False),
+        "fact_paths_written": (fact_report or {}).get("fact_paths_written", []),
     }
 
 
@@ -3642,6 +3814,18 @@ def render_writing_maintenance(report: dict) -> str:
         lines.append("\n  Paths written:")
         for path in report["paths_written"]:
             lines.append(f"    - {path}")
+    if report.get("fact_layer_state"):
+        fact_counts = report.get("fact_counts") or {}
+        lines.append(
+            "\n  Fact layer: "
+            f"{str(report.get('fact_layer_state', 'missing')).upper()} "
+            f"(add={fact_counts.get('add', 0)} update={fact_counts.get('update', 0)} "
+            f"delete={fact_counts.get('delete', 0)} conflicts={fact_counts.get('conflicts', 0)})"
+        )
+        if report.get("last_fact_sync_at"):
+            lines.append(f"    Last sync: {report['last_fact_sync_at']}")
+        for item in report.get("fact_highlights", [])[:5]:
+            lines.append(f"    - {item}")
 
     for artifact in report.get("artifacts", []):
         lines.append(f"\n  [{artifact['kind']}] {artifact['path']}")
@@ -5799,6 +5983,21 @@ def _empty_verification_report(prepared: dict, scope: str) -> dict:
         "cache_path": str(_verification_cache_path(Path(status["output_root"]))),
         "sync_summary": prepared.get("sync_summary"),
         "synced": prepared.get("synced", False),
+        "fact_layer_state": "missing",
+        "fact_counts": {
+            "active": 0,
+            "retired": 0,
+            "add": 0,
+            "update": 0,
+            "delete": 0,
+            "none": 0,
+            "conflicts": 0,
+        },
+        "fact_ops_preview": [],
+        "fact_conflicts": [],
+        "fact_highlights": [],
+        "last_fact_sync_at": None,
+        "fact_layer_ready": False,
     }
 
 
@@ -6300,6 +6499,13 @@ def _build_verification_report(
     warnings = list(prepared["warnings"])
     packets = _run_sidecar_queries(status, query_plan, n_results=n_results, warnings=warnings, curated_for_context=True)
     findings = _collect_verify_findings(status, verify_bundle, scope, packets)
+    fact_report = _build_fact_layer_report(
+        status,
+        verify_bundle,
+        scope=scope,
+        apply=False,
+        write_preview=write_cache,
+    )
     report = {
         "project": status["project"],
         "project_root": status["project_root"],
@@ -6310,13 +6516,23 @@ def _build_verification_report(
         "last_synced_at": status.get("last_synced_at"),
         "finding_counts": _finding_counts(findings),
         "findings": findings,
-        "warnings": _unique_lines(warnings + _verification_scope_warnings(status, findings)),
-        "recommended_actions": _unique_lines([item["suggested_fix"] for item in findings if item.get("suggested_fix")]),
+        "warnings": _unique_lines(warnings + _verification_scope_warnings(status, findings) + fact_report.get("warnings", [])),
+        "recommended_actions": _unique_lines(
+            [item["suggested_fix"] for item in findings if item.get("suggested_fix")]
+            + fact_report.get("fact_recommended_actions", [])
+        ),
         "query_packets": packets,
         "source_snapshot": _build_source_snapshot(_verification_source_paths(status, verify_bundle, scope)),
         "cache_path": str(_verification_cache_path(Path(status["output_root"]))),
         "sync_summary": prepared.get("sync_summary"),
         "synced": prepared.get("synced", False),
+        "fact_layer_state": fact_report["fact_layer_state"],
+        "fact_counts": fact_report["fact_counts"],
+        "fact_ops_preview": fact_report["fact_ops_preview"],
+        "fact_conflicts": fact_report["fact_conflicts"],
+        "fact_highlights": fact_report["fact_highlights"],
+        "last_fact_sync_at": fact_report["last_fact_sync_at"],
+        "fact_layer_ready": fact_report["fact_layer_ready"],
     }
     if write_cache:
         cache_payload = {
@@ -6330,6 +6546,9 @@ def _build_verification_report(
             "findings": report["findings"],
             "last_synced_at": report["last_synced_at"],
             "source_snapshot": report["source_snapshot"],
+            "fact_layer_state": report["fact_layer_state"],
+            "fact_counts": report["fact_counts"],
+            "last_fact_sync_at": report["last_fact_sync_at"],
         }
         cache_path = Path(report["cache_path"])
         _ensure_dir(cache_path.parent)
@@ -6392,10 +6611,32 @@ def render_writing_verify(report: dict) -> str:
         f"warns={report['finding_counts']['warn']} "
         f"info={report['finding_counts']['info']}"
     )
+    if report.get("fact_layer_state"):
+        fact_counts = report.get("fact_counts") or {}
+        lines.append(
+            "  Fact layer:    "
+            f"{str(report.get('fact_layer_state', 'missing')).upper()} "
+            f"(add={fact_counts.get('add', 0)} "
+            f"update={fact_counts.get('update', 0)} "
+            f"delete={fact_counts.get('delete', 0)} "
+            f"conflicts={fact_counts.get('conflicts', 0)})"
+        )
+        if report.get("last_fact_sync_at"):
+            lines.append(f"  Fact sync:     {report['last_fact_sync_at']}")
     if report.get("recommended_actions"):
         lines.append("\n  Recommended repairs:")
         for item in report["recommended_actions"][:5]:
             lines.append(f"    - {item}")
+    if report.get("fact_highlights"):
+        lines.append("\n  Fact preview:")
+        for item in report["fact_highlights"][:5]:
+            lines.append(f"    - {item}")
+    if report.get("fact_conflicts"):
+        lines.append("\n  Fact conflicts:")
+        for item in report["fact_conflicts"][:3]:
+            lines.append(
+                f"    - {item['category']}/{item['attribute']}: {item['subject']}"
+            )
     if report.get("findings"):
         lines.append("\n  Findings:")
         for item in report["findings"]:
@@ -7206,6 +7447,796 @@ def _cached_verification_summary(output_root: Path) -> dict:
     }
 
 
+def _facts_dir(output_root: Path) -> Path:
+    return Path(output_root).expanduser().resolve() / FACTS_DIRNAME
+
+
+def _facts_snapshot_path(output_root: Path) -> Path:
+    return _facts_dir(output_root) / FACTS_SNAPSHOT_FILENAME
+
+
+def _fact_log_path(output_root: Path) -> Path:
+    return _facts_dir(output_root) / FACT_LOG_FILENAME
+
+
+def _fact_preview_path(output_root: Path) -> Path:
+    return _facts_dir(output_root) / FACT_PREVIEW_FILENAME
+
+
+def _load_json_document(path: Path) -> dict | None:
+    path = Path(path).expanduser().resolve()
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _load_fact_snapshot(path: Path) -> dict | None:
+    payload = _load_json_document(path)
+    if not payload:
+        return None
+    payload.setdefault("facts", [])
+    payload.setdefault("fact_counts", {})
+    return payload
+
+
+def _load_fact_preview(path: Path) -> dict | None:
+    payload = _load_json_document(path)
+    if not payload:
+        return None
+    payload.setdefault("operations", [])
+    payload.setdefault("conflicts", [])
+    payload.setdefault("fact_counts", {})
+    return payload
+
+
+def _fact_cache_is_stale(payload: dict | None) -> bool:
+    if not payload:
+        return True
+    snapshot = payload.get("source_snapshot", [])
+    if not snapshot:
+        return True
+    for item in snapshot:
+        path = item.get("path")
+        if not path:
+            return True
+        if _describe_source_path(Path(path)) != item:
+            return True
+    return False
+
+
+def _fact_layer_state_summary(snapshot: dict | None, preview: dict | None) -> str:
+    snapshot_stale = _fact_cache_is_stale(snapshot)
+    preview_stale = _fact_cache_is_stale(preview)
+    if snapshot and not snapshot_stale:
+        return "ready"
+    if snapshot and snapshot_stale:
+        return "stale"
+    if preview and not preview_stale:
+        return "preview_only"
+    if preview and preview_stale:
+        return "preview_stale"
+    return "missing"
+
+
+def _cached_fact_layer_summary(output_root: Path) -> dict:
+    output_root = Path(output_root).expanduser().resolve()
+    snapshot_path = _facts_snapshot_path(output_root)
+    preview_path = _fact_preview_path(output_root)
+    snapshot = _load_fact_snapshot(snapshot_path)
+    preview = _load_fact_preview(preview_path)
+    timestamps = [
+        value
+        for value in (
+            (snapshot or {}).get("updated_at"),
+            (preview or {}).get("previewed_at"),
+        )
+        if value
+    ]
+    return {
+        "fact_layer_state": _fact_layer_state_summary(snapshot, preview),
+        "fact_layer_ready": bool(snapshot) and not _fact_cache_is_stale(snapshot),
+        "last_fact_sync_at": max(timestamps) if timestamps else None,
+        "fact_snapshot_stale": _fact_cache_is_stale(snapshot),
+        "fact_preview_stale": _fact_cache_is_stale(preview),
+        "fact_counts": (
+            (preview or {}).get("fact_counts")
+            or (snapshot or {}).get("fact_counts")
+            or {
+                "active": 0,
+                "retired": 0,
+                "add": 0,
+                "update": 0,
+                "delete": 0,
+                "none": 0,
+                "conflicts": 0,
+            }
+        ),
+        "fact_snapshot_path": str(snapshot_path),
+        "fact_preview_path": str(preview_path),
+    }
+
+
+def _fact_source_keys(scope: str) -> tuple[str, ...]:
+    if scope not in VERIFY_SCOPE_SOURCE_KEYS:
+        return VERIFY_SCOPE_SOURCE_KEYS["full"]
+    keys = list(VERIFY_SCOPE_SOURCE_KEYS[scope])
+    if scope != "full":
+        for extra in ("story_so_far", "state_tracker", "timeline"):
+            if extra not in keys and extra in VERIFY_SCOPE_SOURCE_KEYS["full"]:
+                keys.append(extra)
+    return tuple(keys)
+
+
+def _fact_source_paths(status: dict, bundle: dict, scope: str) -> list[Path]:
+    manifest_path = status.get("manifest_path") or (Path(status["output_root"]) / STATE_FILENAME)
+    paths = [Path(manifest_path)]
+    for key in _fact_source_keys(scope):
+        payload = bundle.get(key, {})
+        path = payload.get("path")
+        if path:
+            paths.append(Path(path))
+    return paths
+
+
+def _fact_confidence(priority: int) -> float:
+    return {
+        0: 1.0,
+        1: 0.95,
+        2: 0.9,
+        3: 0.85,
+        4: 0.8,
+    }.get(priority, 0.75)
+
+
+def _fact_identity(category: str, subject: str, attribute: str) -> str:
+    payload = {
+        "category": category,
+        "subject": _normalize_heading_key(subject),
+        "attribute": _normalize_heading_key(attribute),
+    }
+    return hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+
+
+def _fact_source_ref(payload: dict, source_key: str, line: str, section: str | None = None) -> dict:
+    ref = {
+        "path": payload.get("path"),
+        "source": source_key,
+        "line": _clean_highlight_line(line),
+    }
+    if section:
+        ref["section"] = section
+    return ref
+
+
+def _fact_value_key(value: str | None) -> str:
+    return _normalize_text(value or "")
+
+
+def _append_fact_candidate(
+    candidates: list[dict],
+    *,
+    category: str,
+    subject: str,
+    attribute: str,
+    value: str,
+    payload: dict,
+    source_key: str,
+    chapter: str | None,
+    arc: str | None,
+    line: str,
+    section: str | None = None,
+    notes: str | None = None,
+):
+    subject_clean = _clean_highlight_line(subject)
+    value_clean = _clean_highlight_line(value)
+    line_clean = _clean_highlight_line(line)
+    if not subject_clean or not value_clean or not line_clean:
+        return
+    priority = FACT_SOURCE_PRIORITY[source_key]
+    candidates.append(
+        {
+            "id": _fact_identity(category, subject_clean, attribute),
+            "category": category,
+            "subject": subject_clean,
+            "attribute": attribute,
+            "value": value_clean,
+            "status": "active",
+            "chapter": chapter,
+            "arc": arc,
+            "sources": [_fact_source_ref(payload, source_key, line_clean, section)],
+            "updated_at": None,
+            "confidence": _fact_confidence(priority),
+            "notes": _clean_highlight_line(notes or "") or None,
+            "_priority": priority,
+            "_value_key": _fact_value_key(value_clean),
+        }
+    )
+
+
+def _extract_status_row_fact_candidates(
+    candidates: list[dict],
+    *,
+    payload: dict,
+    source_key: str,
+    chapter: str | None,
+    arc: str | None,
+):
+    for row in _extract_status_rows(payload, source_key):
+        parts = [part.strip() for part in row["line"].split(" — ") if part.strip()]
+        notes = parts[2] if len(parts) > 2 else None
+        _append_fact_candidate(
+            candidates,
+            category="continuity_thread",
+            subject=row["label"],
+            attribute="status",
+            value=row["status"],
+            payload=payload,
+            source_key=source_key,
+            chapter=chapter,
+            arc=arc,
+            line=row["line"],
+            section=None,
+            notes=notes,
+        )
+
+
+def _extract_section_fact_candidates(
+    candidates: list[dict],
+    *,
+    payload: dict,
+    source_key: str,
+    chapter: str | None,
+    arc: str | None,
+):
+    for title, lines in payload.get("sections", {}).items():
+        title_key = _normalize_heading_key(title)
+        for raw_line in lines:
+            cleaned = _clean_highlight_line(raw_line)
+            if not cleaned or _is_low_value_doc_line(cleaned):
+                continue
+            if source_key.startswith("latest_") and _is_low_signal_artifact_line(cleaned):
+                continue
+            if " — " in cleaned:
+                continue
+            category = None
+            attribute = None
+            value = None
+            if any(keyword in title_key for keyword in ("locked decision", "carry forward decision")):
+                category = "locked_decision"
+                attribute = "decision"
+                value = "locked"
+            elif any(keyword in title_key for keyword in ("guardrail", "watch out", "final checklist")):
+                category = "guardrail"
+                attribute = "guardrail"
+                value = "active"
+            elif any(
+                keyword in title_key
+                for keyword in ("thread", "continuity closeout", "open thread", "next start point", "open work")
+            ):
+                category = "continuity_thread"
+                attribute = "status"
+                value = "active"
+            elif source_key == "timeline" or "timeline" in title_key:
+                category = "timeline_fact"
+                attribute = "chronology"
+                value = "active"
+            if not category:
+                continue
+            _append_fact_candidate(
+                candidates,
+                category=category,
+                subject=cleaned,
+                attribute=attribute,
+                value=value,
+                payload=payload,
+                source_key=source_key,
+                chapter=chapter,
+                arc=arc,
+                line=cleaned,
+                section=title,
+                notes=title,
+            )
+
+
+def _extract_artifact_fact_candidates(
+    candidates: list[dict],
+    *,
+    payload: dict,
+    source_key: str,
+    chapter: str | None,
+    arc: str | None,
+):
+    if not payload.get("exists"):
+        return
+    for line in _carry_forward_lines_from_artifact(source_key, payload):
+        cleaned = _clean_highlight_line(line)
+        if not cleaned or _is_low_signal_artifact_line(cleaned):
+            continue
+        if " — " in cleaned:
+            parts = [part.strip() for part in cleaned.split(" — ") if part.strip()]
+            if len(parts) >= 2:
+                _append_fact_candidate(
+                    candidates,
+                    category="continuity_thread",
+                    subject=parts[0],
+                    attribute="status",
+                    value=_canonical_state_value(parts[1]) or parts[1],
+                    payload=payload,
+                    source_key=source_key,
+                    chapter=chapter,
+                    arc=arc,
+                    line=cleaned,
+                    notes=parts[2] if len(parts) > 2 else None,
+                )
+                continue
+        _append_fact_candidate(
+            candidates,
+            category="continuity_thread",
+            subject=cleaned,
+            attribute="status",
+            value="active",
+            payload=payload,
+            source_key=source_key,
+            chapter=chapter,
+            arc=arc,
+            line=cleaned,
+        )
+
+
+def _extract_fact_candidates(status: dict, bundle: dict, scope: str) -> list[dict]:
+    chapter = (
+        _extract_field_from_payload(bundle.get("current_chapter_notes", {}), "chapter")
+        or _extract_field_from_payload(bundle.get("current_notes", {}), "chapter")
+    )
+    arc = (
+        _extract_field_from_payload(bundle.get("current_chapter_notes", {}), "arc")
+        or _extract_field_from_payload(bundle.get("current_notes", {}), "arc")
+    )
+    candidates: list[dict] = []
+
+    current_notes = bundle.get("current_notes", {})
+    current_chapter = bundle.get("current_chapter_notes", {})
+    story_so_far = bundle.get("story_so_far", {})
+
+    project_fact_specs = (
+        (current_notes, "current_notes", "status", "project_state", "project", "status"),
+        (current_notes, "current_notes", "next_action", "project_state", "project", "next_action"),
+        (current_chapter, "current_chapter_notes", "phase", "chapter_state", chapter or "current chapter", "phase"),
+        (current_chapter, "current_chapter_notes", "chapter", "chapter_state", "current chapter", "identity"),
+        (current_chapter, "current_chapter_notes", "working_title", "chapter_state", chapter or "current chapter", "working_title"),
+        (current_chapter, "current_chapter_notes", "audit_status", "chapter_state", chapter or "current chapter", "audit_status"),
+        (current_chapter, "current_chapter_notes", "latest_score", "chapter_state", chapter or "current chapter", "latest_score"),
+        (current_notes, "current_notes", "arc", "arc_state", arc or "current arc", "identity"),
+        (current_chapter, "current_chapter_notes", "arc", "arc_state", arc or "current arc", "identity"),
+    )
+    for payload, source_key, field_name, category, subject, attribute in project_fact_specs:
+        value = _extract_field_from_payload(payload, field_name)
+        if not value:
+            continue
+        _append_fact_candidate(
+            candidates,
+            category=category,
+            subject=subject,
+            attribute=attribute,
+            value=value,
+            payload=payload,
+            source_key=source_key,
+            chapter=chapter,
+            arc=arc,
+            line=f"{attribute}: {value}",
+        )
+
+    source_keys = _fact_source_keys(scope)
+    for source_key in source_keys:
+        payload = bundle.get(source_key, {})
+        if not payload or not payload.get("exists"):
+            continue
+        if source_key in {"current_notes", "current_chapter_notes", "story_so_far", "state_tracker", "timeline"}:
+            _extract_status_row_fact_candidates(
+                candidates,
+                payload=payload,
+                source_key=source_key,
+                chapter=chapter,
+                arc=arc,
+            )
+            _extract_section_fact_candidates(
+                candidates,
+                payload=payload,
+                source_key=source_key,
+                chapter=chapter,
+                arc=arc,
+            )
+        elif source_key.startswith("latest_"):
+            _extract_artifact_fact_candidates(
+                candidates,
+                payload=payload,
+                source_key=source_key,
+                chapter=chapter,
+                arc=arc,
+            )
+
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item["_priority"],
+            FACT_CATEGORY_ORDER.index(item["category"]) if item["category"] in FACT_CATEGORY_ORDER else 99,
+            _normalize_heading_key(item["subject"]),
+            _normalize_heading_key(item["attribute"]),
+            item["_value_key"],
+        ),
+    )
+
+
+def _clean_fact_record(record: dict) -> dict:
+    return {key: value for key, value in record.items() if not key.startswith("_")}
+
+
+def _merge_fact_sources(records: Sequence[dict]) -> list[dict]:
+    merged: list[dict] = []
+    seen = set()
+    for record in records:
+        for source in record.get("sources", []):
+            key = (
+                source.get("path"),
+                source.get("source"),
+                source.get("section"),
+                source.get("line"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(source)
+    return merged
+
+
+def _fact_conflict_record(winner: dict, conflicts: Sequence[dict], *, review_required: bool) -> dict:
+    return {
+        "fact_id": winner["id"],
+        "category": winner["category"],
+        "subject": winner["subject"],
+        "attribute": winner["attribute"],
+        "kept_value": None if review_required else winner["value"],
+        "conflicting_values": [
+            {
+                "value": item["value"],
+                "source": item["sources"][0].get("source"),
+                "path": item["sources"][0].get("path"),
+                "line": item["sources"][0].get("line"),
+            }
+            for item in conflicts
+        ],
+        "sources": [item.get("path") for item in _merge_fact_sources((winner, *conflicts)) if item.get("path")],
+        "review_required": review_required,
+        "reason": (
+            "top_priority_sources_disagree"
+            if review_required
+            else "lower_priority_sources_disagree"
+        ),
+        "recommended_action": "review" if review_required else "accept",
+    }
+
+
+def _accepted_fact_candidates(candidates: Sequence[dict]) -> tuple[dict[str, dict], list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    for candidate in candidates:
+        grouped.setdefault(candidate["id"], []).append(candidate)
+
+    accepted: dict[str, dict] = {}
+    conflicts: list[dict] = []
+    for fact_id, items in grouped.items():
+        ordered = sorted(items, key=lambda item: (item["_priority"], item["_value_key"]))
+        winner = ordered[0]
+        top_priority = winner["_priority"]
+        top_items = [item for item in ordered if item["_priority"] == top_priority]
+        top_values = {_fact_value_key(item["value"]) for item in top_items}
+        if len(top_values) > 1:
+            conflicts.append(_fact_conflict_record(winner, top_items[1:], review_required=True))
+            continue
+
+        lower_conflicts = [
+            item for item in ordered[1:] if item["_value_key"] != winner["_value_key"]
+        ]
+        if lower_conflicts:
+            conflicts.append(_fact_conflict_record(winner, lower_conflicts, review_required=False))
+
+        merged = dict(winner)
+        merged["sources"] = _merge_fact_sources(
+            [item for item in ordered if item["_value_key"] == winner["_value_key"]]
+        )
+        notes = _unique_lines(
+            [item["notes"] for item in ordered if item.get("notes") and item["_value_key"] == winner["_value_key"]]
+        )
+        merged["notes"] = "; ".join(notes) if notes else None
+        accepted[fact_id] = _clean_fact_record(merged)
+    return accepted, conflicts
+
+
+def _fact_record_changed(previous: dict, proposed: dict) -> bool:
+    return any(
+        _normalize_text((previous or {}).get(field) or "") != _normalize_text((proposed or {}).get(field) or "")
+        for field in ("category", "subject", "attribute", "value", "status", "chapter", "arc")
+    )
+
+
+def _fact_operation(
+    *,
+    previous: dict | None,
+    proposed: dict | None,
+    timestamp: str,
+) -> dict:
+    if previous and proposed:
+        operation = "UPDATE" if _fact_record_changed(previous, proposed) else "NONE"
+        if operation == "UPDATE":
+            proposed = {**proposed, "updated_at": timestamp}
+        reason = (
+            "Explicit fact value changed in the current extracted sources."
+            if operation == "UPDATE"
+            else "Fact still matches the current extracted sources."
+        )
+    elif proposed:
+        operation = "ADD"
+        proposed = {**proposed, "updated_at": timestamp}
+        reason = "New explicit fact extracted from the current source set."
+    else:
+        operation = "DELETE"
+        reason = "Active fact no longer appears in the current extracted source set."
+        proposed = {
+            **previous,
+            "status": "retired",
+            "updated_at": timestamp,
+        }
+
+    return {
+        "timestamp": timestamp,
+        "operation": operation,
+        "fact_id": (proposed or previous)["id"],
+        "category": (proposed or previous)["category"],
+        "subject": (proposed or previous)["subject"],
+        "attribute": (proposed or previous)["attribute"],
+        "previous": previous,
+        "proposed": proposed,
+        "reason": reason,
+        "sources": list((proposed or previous).get("sources", [])),
+        "recommended_action": "ignore" if operation == "NONE" else "accept",
+    }
+
+
+def _fact_preview_counts(operations: Sequence[dict], facts: Sequence[dict], conflicts: Sequence[dict]) -> dict:
+    return {
+        "active": sum(1 for item in facts if item.get("status") == "active"),
+        "retired": sum(1 for item in facts if item.get("status") == "retired"),
+        "add": sum(1 for item in operations if item["operation"] == "ADD"),
+        "update": sum(1 for item in operations if item["operation"] == "UPDATE"),
+        "delete": sum(1 for item in operations if item["operation"] == "DELETE"),
+        "none": sum(1 for item in operations if item["operation"] == "NONE"),
+        "conflicts": len(conflicts),
+    }
+
+
+def _fact_preview_state(snapshot: dict | None, operations: Sequence[dict], conflicts: Sequence[dict]) -> str:
+    if conflicts:
+        return "needs_review"
+    if any(item["operation"] in {"ADD", "UPDATE", "DELETE"} for item in operations):
+        return "pending_changes" if snapshot else "preview_only"
+    if snapshot:
+        return "ready"
+    return "missing"
+
+
+def _fact_operation_sort_key(operation: dict) -> tuple[int, str, str]:
+    order = {"ADD": 0, "UPDATE": 1, "DELETE": 2, "NONE": 3}
+    return (
+        order.get(operation["operation"], 99),
+        _normalize_heading_key(operation["category"]),
+        _normalize_heading_key(operation["subject"]),
+    )
+
+
+def _fact_preview_highlights(operations: Sequence[dict], conflicts: Sequence[dict], limit: int = 5) -> list[str]:
+    items = []
+    for conflict in conflicts[:limit]:
+        conflicting = ", ".join(
+            sorted({entry["value"] for entry in conflict.get("conflicting_values", []) if entry.get("value")})
+        )
+        items.append(
+            f"REVIEW {conflict['category']}/{conflict['attribute']}: {conflict['subject']} -> {conflicting}"
+        )
+    for operation in sorted(operations, key=_fact_operation_sort_key):
+        if len(items) >= limit:
+            break
+        if operation["operation"] == "NONE":
+            continue
+        proposed = operation.get("proposed") or {}
+        previous = operation.get("previous") or {}
+        if operation["operation"] == "UPDATE":
+            items.append(
+                f"UPDATE {proposed['category']}/{proposed['attribute']}: {proposed['subject']} -> {previous.get('value')} => {proposed.get('value')}"
+            )
+        else:
+            items.append(
+                f"{operation['operation']} {proposed.get('category', previous.get('category'))}/{proposed.get('attribute', previous.get('attribute'))}: "
+                f"{proposed.get('subject', previous.get('subject'))}"
+            )
+    if not items and operations:
+        stable = sum(1 for item in operations if item["operation"] == "NONE")
+        items.append(f"NONE {stable} fact(s) still match the current extracted sources.")
+    return items[:limit]
+
+
+def _fact_recommended_actions(operations: Sequence[dict], conflicts: Sequence[dict]) -> list[str]:
+    actions = []
+    if conflicts:
+        actions.append("Review the fact conflicts before trusting the secondary fact layer as an accepted summary.")
+    if any(item["operation"] in {"ADD", "UPDATE", "DELETE"} for item in operations):
+        actions.append("Apply the explicit fact ops through a write-capable command when the preview looks right.")
+    if not actions:
+        actions.append("No fact-layer changes are pending.")
+    return actions
+
+
+def _build_fact_preview_report(
+    status: dict,
+    bundle: dict,
+    *,
+    scope: str,
+) -> dict:
+    output_root = Path(status["output_root"])
+    snapshot_path = _facts_snapshot_path(output_root)
+    preview_path = _fact_preview_path(output_root)
+    snapshot = _load_fact_snapshot(snapshot_path)
+    existing_facts = {
+        item["id"]: item
+        for item in (snapshot or {}).get("facts", [])
+        if item.get("status") == "active"
+    }
+    accepted, conflicts = _accepted_fact_candidates(_extract_fact_candidates(status, bundle, scope))
+    timestamp = _utcnow_iso()
+    operations = []
+    next_facts = {
+        item["id"]: dict(item)
+        for item in (snapshot or {}).get("facts", [])
+    }
+    for fact_id in sorted(set(existing_facts) | set(accepted)):
+        previous = existing_facts.get(fact_id)
+        proposed = accepted.get(fact_id)
+        operation = _fact_operation(previous=previous, proposed=proposed, timestamp=timestamp)
+        operations.append(operation)
+        if operation["operation"] == "NONE":
+            continue
+        next_facts[fact_id] = dict(operation["proposed"])
+    counts = _fact_preview_counts(operations, next_facts.values(), conflicts)
+    report = {
+        "project": status["project"],
+        "project_root": status["project_root"],
+        "vault_root": status["vault_root"],
+        "scope": scope,
+        "previewed_at": timestamp,
+        "state": _fact_preview_state(snapshot, operations, conflicts),
+        "source_snapshot": _build_source_snapshot(_fact_source_paths(status, bundle, scope)),
+        "fact_counts": counts,
+        "operations": operations,
+        "conflicts": conflicts,
+        "recommended_actions": _fact_recommended_actions(operations, conflicts),
+        "warnings": [
+            f"fact layer needs review for {len(conflicts)} conflicting key(s)."
+            for _ in ([1] if conflicts else [])
+        ],
+        "highlights": _fact_preview_highlights(operations, conflicts),
+        "snapshot_path": str(snapshot_path),
+        "preview_path": str(preview_path),
+        "log_path": str(_fact_log_path(output_root)),
+    }
+    return report
+
+
+def _write_fact_preview(report: dict) -> str:
+    preview_path = Path(report["preview_path"])
+    _ensure_dir(preview_path.parent)
+    preview_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return str(preview_path)
+
+
+def _apply_fact_preview(report: dict) -> dict:
+    snapshot_path = Path(report["snapshot_path"])
+    preview_path = Path(report["preview_path"])
+    log_path = Path(report["log_path"])
+    existing_snapshot = _load_fact_snapshot(snapshot_path) or {
+        "project": report["project"],
+        "project_root": report["project_root"],
+        "vault_root": report["vault_root"],
+        "facts": [],
+    }
+    facts_by_id = {item["id"]: item for item in existing_snapshot.get("facts", [])}
+    applied_ops = [item for item in report["operations"] if item["recommended_action"] == "accept"]
+    log_entries = [item for item in applied_ops if item["operation"] in {"ADD", "UPDATE", "DELETE"}]
+
+    for operation in applied_ops:
+        if operation["operation"] == "NONE":
+            continue
+        facts_by_id[operation["fact_id"]] = dict(operation["proposed"])
+
+    snapshot_payload = {
+        "project": report["project"],
+        "project_root": report["project_root"],
+        "vault_root": report["vault_root"],
+        "updated_at": _utcnow_iso(),
+        "source_snapshot": list(report["source_snapshot"]),
+        "fact_counts": _fact_preview_counts(report["operations"], facts_by_id.values(), report["conflicts"]),
+        "facts": sorted(
+            facts_by_id.values(),
+            key=lambda item: (
+                item.get("status") != "active",
+                FACT_CATEGORY_ORDER.index(item["category"]) if item["category"] in FACT_CATEGORY_ORDER else 99,
+                _normalize_heading_key(item["subject"]),
+                _normalize_heading_key(item["attribute"]),
+            ),
+        ),
+    }
+
+    _ensure_dir(snapshot_path.parent)
+    preview_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    snapshot_path.write_text(json.dumps(snapshot_payload, indent=2), encoding="utf-8")
+    if not log_path.exists():
+        log_path.write_text("", encoding="utf-8")
+    if log_entries:
+        with open(log_path, "a", encoding="utf-8") as f:
+            for item in log_entries:
+                f.write(json.dumps(item) + "\n")
+
+    return {
+        "fact_layer_state": report["state"],
+        "fact_counts": snapshot_payload["fact_counts"],
+        "fact_ops_preview": sorted(report["operations"], key=_fact_operation_sort_key)[:5],
+        "fact_conflicts": report["conflicts"][:5],
+        "fact_highlights": report["highlights"][:5],
+        "fact_recommended_actions": report["recommended_actions"][:5],
+        "last_fact_sync_at": snapshot_payload["updated_at"],
+        "fact_layer_ready": True,
+        "fact_write_performed": True,
+        "fact_paths_written": [str(preview_path), str(snapshot_path), str(log_path)],
+    }
+
+
+def _fact_report_payload(report: dict, *, apply: bool, write_preview: bool) -> dict:
+    if apply:
+        return _apply_fact_preview(report)
+    if write_preview:
+        _write_fact_preview(report)
+    snapshot = _load_fact_snapshot(Path(report["snapshot_path"]))
+    return {
+        "fact_layer_state": report["state"],
+        "fact_counts": report["fact_counts"],
+        "fact_ops_preview": sorted(report["operations"], key=_fact_operation_sort_key)[:5],
+        "fact_conflicts": report["conflicts"][:5],
+        "fact_highlights": report["highlights"][:5],
+        "fact_recommended_actions": report["recommended_actions"][:5],
+        "last_fact_sync_at": max(
+            [value for value in ((snapshot or {}).get("updated_at"), report["previewed_at"]) if value]
+        ),
+        "fact_layer_ready": bool(snapshot) and not _fact_cache_is_stale(snapshot),
+        "fact_write_performed": False,
+        "fact_paths_written": [report["preview_path"]] if write_preview else [],
+    }
+
+
+def _build_fact_layer_report(
+    status: dict,
+    bundle: dict,
+    *,
+    scope: str,
+    apply: bool,
+    write_preview: bool,
+) -> dict:
+    preview = _build_fact_preview_report(status, bundle, scope=scope)
+    payload = _fact_report_payload(preview, apply=apply, write_preview=write_preview)
+    payload["warnings"] = list(preview.get("warnings", []))
+    return payload
+
+
 def _mine_exported_sidecar(
     output_root: Path,
     project: str,
@@ -7703,6 +8734,7 @@ def doctor_writing_sidecar(
     workflow_checks = _collect_workflow_checks(project_root)
     assistant_ready = _assistant_ready(workflow_checks)
     verification = _cached_verification_summary(Path(context["output_root"]))
+    fact_summary = _cached_fact_layer_summary(Path(context["output_root"]))
     doc_bundle = _load_live_doc_bundle(project_root)
     operative_phase = _derive_operative_phase(doc_bundle, _extract_phase(doc_bundle))
     recommendations = _workflow_recommendations(
@@ -7810,6 +8842,8 @@ def doctor_writing_sidecar(
         "last_verified_at": verification["last_verified_at"],
         "finding_counts": verification["finding_counts"],
         "verification_stale": verification["verification_stale"],
+        "fact_layer_ready": fact_summary["fact_layer_ready"],
+        "last_fact_sync_at": fact_summary["last_fact_sync_at"],
         "ok": not any(item["status"] == "fail" for item in checks + workflow_checks),
     }
     return report
@@ -7874,6 +8908,9 @@ def print_doctor_report(report: dict):
     if report.get("finding_counts"):
         counts = report["finding_counts"]
         print(f"  Findings:        errors={counts['error']} warns={counts['warn']} info={counts['info']}")
+    print(f"  Facts ready:     {'YES' if report.get('fact_layer_ready') else 'NO'}")
+    if report.get("last_fact_sync_at"):
+        print(f"  Fact sync:       {report['last_fact_sync_at']}")
     print(f"\n  Result: {'PASS' if report['ok'] else 'FAIL'}")
     print(f"\n{'=' * 55}\n")
 

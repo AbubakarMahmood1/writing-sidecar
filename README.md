@@ -81,6 +81,7 @@ Structured output is available on:
 - builds a compact startup packet for assistants with `context`
 - generates deterministic restart / handoff / continuity recaps with `recap`
 - verifies continuity drift against live docs, trackers, timeline files, and sidecar carry-forward memory with `verify`
+- keeps a secondary fact layer for deterministic fact previews, drift checks, and explicit reconciliation on write-capable commands
 - auto-resolves the project when the input path is already inside one sidecar-enabled project
 - isolates Chroma/ONNX caches under a vault-local runtime directory
 
@@ -104,9 +105,17 @@ Tool-owned continuity cache:
 
 - `.sidecars/<project>/.writing-sidecar-verify.json`
 
+Tool-owned fact layer:
+
+- `.sidecars/<project>/facts/reconcile_preview.json`
+- `.sidecars/<project>/facts/facts_snapshot.json`
+- `.sidecars/<project>/facts/fact_log.jsonl`
+
 ## Scope
 
 `writing-sidecar` is process memory only.
+
+The fact layer is secondary and reviewable. Live docs still win, sidecar artifacts stay evidence, and accepted facts never rewrite canon docs.
 
 It is not:
 
@@ -168,7 +177,7 @@ Recommended Codex operating loop:
 
 ## JSON contract
 
-When you use `--format json`, v7 keeps these top-level keys stable where they apply:
+When you use `--format json`, v10.x keeps these top-level keys stable where they apply:
 
 - `project`
 - `project_root`
@@ -181,16 +190,16 @@ When you use `--format json`, v7 keeps these top-level keys stable where they ap
 Command-specific payload keys remain stable too:
 
 - `status`: `room_counts`, `config_path`, `manifest_path`, `palace_path`, `runtime_root`
-- `session`: `task`, `operative_phase`, `suggested_loadout`, `doc_loadout`, `file_targets`, `continuity_watch`, `phase_guardrails`, `done_criteria`, `recommended_actions`, `recommended_commands`, `artifact_targets`, `write_performed`, `sync_performed`, `queries_run`, `results`, `recap_sections`, `warnings`, `verification_scope`, `continuity_state`, `finding_counts`, `top_findings`, `recommended_repairs`
+- `session`: `task`, `operative_phase`, `suggested_loadout`, `doc_loadout`, `file_targets`, `continuity_watch`, `phase_guardrails`, `done_criteria`, `recommended_actions`, `recommended_commands`, `artifact_targets`, `write_performed`, `sync_performed`, `queries_run`, `results`, `recap_sections`, `warnings`, `verification_scope`, `continuity_state`, `finding_counts`, `top_findings`, `recommended_repairs`, `fact_layer_state`, `fact_counts`, `fact_ops_preview`, `fact_conflicts`, `fact_highlights`, `last_fact_sync_at`, `fact_layer_ready`
 - `context`: `mode`, `queries_run`, `results`, `warnings`, `suggested_loadout`, `recent_artifacts`
 - `recap`: `mode`, `sections`, `queries_run`, `results`, `warnings`
-- `projects`: `count`, `projects`, including per-project `operative_phase`, `next_action`, `assistant_ready`, `last_checkpoint_at`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`, `recommended_automation_command`, `recommended_schedule_profile`
-- `doctor`: `checks`, `workflow_checks`, `assistant_ready`, `ok`, `supported_spec`, `mempalace_version`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`, `recommended_automation_command`, `recommended_schedule_profile`
-- `verify`: `scope`, `state`, `verified_at`, `finding_counts`, `findings`, `recommended_actions`, `query_packets`, `source_snapshot`, `cache_path`
-- `maintain`: `kind`, `mode`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `source_inputs`, `generated_sections`
-- `bundle`: `bundle`, `verify_mode`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `recap_sections`, `steps`, `recommended_actions`, `recommended_commands`, `write_performed`, `paths_written`, `sync_performed`, `warnings`
-- `routine`: `routine`, `verify_mode`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `recap_sections`, `steps`, `recommended_actions`, `recommended_commands`, `write_performed`, `paths_written`, `sync_performed`, `warnings`
-- `automate` helper mode: `target`, `name`, `routine`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `entry_command`, `write_variant_command`, `prompt`, `expected_outputs`, `recommended_actions`, `recommended_commands`, `warnings`
+- `projects`: `count`, `projects`, including per-project `operative_phase`, `next_action`, `assistant_ready`, `last_checkpoint_at`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`, `recommended_automation_command`, `recommended_schedule_profile`, `fact_layer_ready`, `last_fact_sync_at`
+- `doctor`: `checks`, `workflow_checks`, `assistant_ready`, `ok`, `supported_spec`, `mempalace_version`, `continuity_state`, `last_verified_at`, `finding_counts`, `verification_stale`, `recommended_entrypoint`, `recommended_routine`, `recommended_automate_command`, `recommended_automation_command`, `recommended_schedule_profile`, `fact_layer_ready`, `last_fact_sync_at`
+- `verify`: `scope`, `state`, `verified_at`, `finding_counts`, `findings`, `recommended_actions`, `query_packets`, `source_snapshot`, `cache_path`, `fact_layer_state`, `fact_counts`, `fact_ops_preview`, `fact_conflicts`, `fact_highlights`, `last_fact_sync_at`, `fact_layer_ready`
+- `maintain`: `kind`, `mode`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `source_inputs`, `generated_sections`, `fact_layer_state`, `fact_counts`, `fact_ops_preview`, `fact_conflicts`, `fact_highlights`, `last_fact_sync_at`, `fact_layer_ready`, `fact_write_performed`, `fact_paths_written`
+- `bundle`: `bundle`, `verify_mode`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `recap_sections`, `steps`, `recommended_actions`, `recommended_commands`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `fact_layer_state`, `fact_counts`, `fact_conflicts`, `fact_highlights`, `last_fact_sync_at`, `fact_layer_ready`
+- `routine`: `routine`, `verify_mode`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `recap_sections`, `steps`, `recommended_actions`, `recommended_commands`, `write_performed`, `paths_written`, `sync_performed`, `warnings`, `fact_layer_state`, `fact_counts`, `fact_conflicts`, `fact_highlights`, `last_fact_sync_at`, `fact_layer_ready`
+- `automate` helper mode: `target`, `name`, `routine`, `operative_phase`, `continuity_state`, `finding_counts`, `top_findings`, `doc_loadout`, `file_targets`, `artifact_targets`, `entry_command`, `write_variant_command`, `prompt`, `expected_outputs`, `recommended_actions`, `recommended_commands`, `warnings`, `fact_layer_state`, `fact_counts`, `fact_conflicts`, `fact_highlights`, `last_fact_sync_at`, `fact_layer_ready`
 - `automate` suggested-create mode adds: `automation_name`, `automation_prompt`, `automation_rrule`, `automation_cwds`, `automation_status`, `schedule_profile`
 
 Visible helper output is also supported on:

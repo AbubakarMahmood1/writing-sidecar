@@ -37,6 +37,7 @@ The standalone CLI replaces the fork-only `mempalace writing-*` commands.
 - v8 adds `writing-sidecar routine` as the default assistant-facing workflow layer for common work sessions
 - v9 adds `writing-sidecar automate` as the default Codex-facing helper/export layer
 - v10 extends `writing-sidecar automate` with `--mode suggested-create` and built-in schedule profiles for Codex automation suggestion packets
+- v10.x adds an internal secondary fact layer that previews deterministic fact adds/updates/deletes during `verify` and `session`, then persists accepted facts only on explicit write-capable commands
 - startup no longer needs to be a manual `status` + `search` ritual unless you want lower-level control
 - sidecar-safe writeback is now explicit and preview-first instead of being a doc-only habit
 - JSON output is now stable enough for assistant glue through `--format json`
@@ -44,6 +45,7 @@ The standalone CLI replaces the fork-only `mempalace writing-*` commands.
 - `bundle` can also write its rendered packet to an explicit file with `--out`
 - `routine` can also write its rendered packet to an explicit file with `--out`
 - `automate` can also write its rendered helper packet to an explicit file with `--out`
+- `verify`, `session`, `doctor`, and `projects` now surface fact-layer readiness or preview state without changing canon docs
 
 ## Recommended transition
 

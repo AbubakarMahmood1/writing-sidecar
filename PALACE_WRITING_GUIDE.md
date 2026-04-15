@@ -64,6 +64,7 @@ Quick chooser:
 - use `writing-sidecar recap --mode handoff` before handing work to another assistant or another session
 - use `writing-sidecar recap --mode continuity` when the main risk is drift, obligations, or timeline confusion
 - use `writing-sidecar verify --scope chapter|handoff|timeline` before continuity-sensitive transitions
+- treat fact previews as secondary guidance: `verify` and `session` can surface proposed adds/updates/deletes, but accepted facts only land on explicit write-capable commands
 - use lower-level `routine`, `bundle`, `session`, `verify`, `recap`, `search`, or `maintain` only when you need narrower control than the automate flow
 
 ## Startup-first flow
@@ -95,6 +96,12 @@ If another tool or assistant layer needs machine-readable output, use `--format 
 - `automate`
 
 `automate --mode helper` keeps the immediate V9 helper shape. `automate --mode suggested-create` adds Codex automation suggestion fields without creating or editing an automation.
+
+The internal fact layer stays review-first:
+
+- preview commands surface fact deltas and conflicts
+- write-capable commands can persist accepted facts into the sidecar-owned fact snapshot and log
+- live docs remain the source of truth
 
 Visible helper output is available on:
 

@@ -11,9 +11,13 @@ from chromadb.api.client import SharedSystemClient
 
 from writing_sidecar.mempalace_adapter import SUPPORTED_MEMPALACE_SPEC
 from writing_sidecar.workflow import (
+    FACT_LOG_FILENAME,
+    FACT_PREVIEW_FILENAME,
+    FACTS_SNAPSHOT_FILENAME,
     STATE_FILENAME,
     _collect_carry_forward_gap_findings,
     _build_checkpoint_sections,
+    _fact_identity,
     build_writing_automation,
     build_writing_bundle,
     build_writing_context,
@@ -690,9 +694,9 @@ def test_export_then_mine_sidecar_is_searchable_and_status_is_clean():
     try:
         vault_root = tmp_path / "vault"
         project_root = vault_root / "Witcher-DC"
-        output_root = tmp_path / "sidecar"
-        palace_root = tmp_path / "palace"
-        runtime_root = tmp_path / "runtime"
+        output_root = default_output_dir(vault_root.resolve(), "Witcher-DC")
+        palace_root = default_palace_dir(vault_root.resolve(), "Witcher-DC")
+        runtime_root = default_runtime_dir(vault_root.resolve(), "Witcher-DC")
         codex_home = tmp_path / ".codex"
 
         write_file(
@@ -1164,6 +1168,234 @@ def test_verify_ignores_ordinary_draft_language_and_filters_low_signal_artifact_
         assert any("Mera balancing caution" in line for line in carry_forward["evidence"])
         assert all(not line.startswith("Date:") for line in carry_forward["evidence"])
         assert all(".txt" not in line for line in carry_forward["evidence"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_verify_writes_fact_preview_without_snapshot_or_log(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = default_output_dir(vault_root.resolve(), "Witcher-DC")
+        palace_root = default_palace_dir(vault_root.resolve(), "Witcher-DC")
+
+        _ensure_dir(project_root)
+        scaffold_writing_sidecar(str(vault_root), "Witcher-DC")
+        write_file(project_root / "AGENTS.md", "gateway")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** READY FOR SCRIPTING\n**Next Action:** Build the intake scene beats.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                **Phase:** SCRIPTING
+                **Chapter:** 2
+
+                ## Locked Decisions
+
+                - Keep the Atlantis intake fallout localized before any broader convergence.
+
+                ## Threads Carried Forward
+
+                | Thread | Status | Notes |
+                |--------|--------|-------|
+                | Arthur sponsorship | ACTIVE | He still owns the intake burden |
+                """
+            ).strip(),
+        )
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Atlantis intake reference")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [],
+            },
+        )
+
+        report = verify_writing_sidecar(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            sync="never",
+            scope="chapter",
+        )
+
+        facts_dir = output_root / "facts"
+        preview_path = facts_dir / FACT_PREVIEW_FILENAME
+        snapshot_path = facts_dir / FACTS_SNAPSHOT_FILENAME
+        log_path = facts_dir / FACT_LOG_FILENAME
+
+        assert preview_path.exists()
+        assert snapshot_path.exists() is False
+        assert log_path.exists() is False
+        assert report["fact_layer_state"] in {"preview_only", "needs_review"}
+        assert report["fact_ops_preview"] or report["fact_highlights"]
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_verify_fact_reconciliation_reports_update_delete_and_none(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = default_output_dir(vault_root.resolve(), "Witcher-DC")
+        palace_root = default_palace_dir(vault_root.resolve(), "Witcher-DC")
+
+        _ensure_dir(project_root)
+        scaffold_writing_sidecar(str(vault_root), "Witcher-DC")
+        write_file(project_root / "AGENTS.md", "gateway")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** READY FOR SCRIPTING\n**Next Action:** Build the intake scene beats.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                **Phase:** SCRIPTING
+                **Chapter:** 2
+
+                ## Threads Carried Forward
+
+                | Thread | Status | Notes |
+                |--------|--------|-------|
+                | Arthur sponsorship | ACTIVE | He still owns the intake burden |
+                """
+            ).strip(),
+        )
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Atlantis intake reference")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+        )
+        _ensure_dir(palace_root)
+
+        facts_dir = output_root / "facts"
+        _ensure_dir(facts_dir)
+        snapshot_path = facts_dir / FACTS_SNAPSHOT_FILENAME
+        snapshot_path.write_text(
+            json.dumps(
+                {
+                    "project": "Witcher-DC",
+                    "project_root": str(project_root.resolve()),
+                    "vault_root": str(vault_root.resolve()),
+                    "updated_at": "2026-04-10T00:00:00+00:00",
+                    "source_snapshot": [],
+                    "fact_counts": {},
+                    "facts": [
+                        {
+                            "id": _fact_identity("project_state", "project", "status"),
+                            "category": "project_state",
+                            "subject": "project",
+                            "attribute": "status",
+                            "value": "READY FOR BRAINDUMP",
+                            "status": "active",
+                            "chapter": "2",
+                            "arc": None,
+                            "sources": [
+                                {
+                                    "path": str(project_root / "_story_bible" / "05_Current_Notes.md"),
+                                    "source": "current_notes",
+                                    "line": "status: READY FOR BRAINDUMP",
+                                }
+                            ],
+                            "updated_at": "2026-04-10T00:00:00+00:00",
+                            "confidence": 1.0,
+                            "notes": None,
+                        },
+                        {
+                            "id": _fact_identity("continuity_thread", "Arthur sponsorship", "status"),
+                            "category": "continuity_thread",
+                            "subject": "Arthur sponsorship",
+                            "attribute": "status",
+                            "value": "ACTIVE",
+                            "status": "active",
+                            "chapter": "2",
+                            "arc": None,
+                            "sources": [
+                                {
+                                    "path": str(project_root / "_story_bible" / "05_Current_Chapter_Notes.md"),
+                                    "source": "current_chapter_notes",
+                                    "line": "Arthur sponsorship — ACTIVE — He still owns the intake burden",
+                                }
+                            ],
+                            "updated_at": "2026-04-10T00:00:00+00:00",
+                            "confidence": 1.0,
+                            "notes": None,
+                        },
+                        {
+                            "id": _fact_identity("locked_decision", "Retire the old braid opening.", "decision"),
+                            "category": "locked_decision",
+                            "subject": "Retire the old braid opening.",
+                            "attribute": "decision",
+                            "value": "locked",
+                            "status": "active",
+                            "chapter": "2",
+                            "arc": None,
+                            "sources": [
+                                {
+                                    "path": str(project_root / "_story_bible" / "05_Current_Chapter_Notes.md"),
+                                    "source": "current_chapter_notes",
+                                    "line": "Retire the old braid opening.",
+                                }
+                            ],
+                            "updated_at": "2026-04-10T00:00:00+00:00",
+                            "confidence": 1.0,
+                            "notes": None,
+                        },
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [],
+            },
+        )
+
+        verify_writing_sidecar(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            sync="never",
+            scope="chapter",
+        )
+
+        preview = json.loads((facts_dir / FACT_PREVIEW_FILENAME).read_text(encoding="utf-8"))
+        operations = {
+            (item["category"], item["subject"], item["attribute"]): item["operation"]
+            for item in preview["operations"]
+        }
+
+        assert operations[("project_state", "project", "status")] == "UPDATE"
+        assert operations[("continuity_thread", "Arthur sponsorship", "status")] == "NONE"
+        assert operations[("locked_decision", "Retire the old braid opening.", "decision")] == "DELETE"
+        assert any(item["operation"] == "ADD" for item in preview["operations"])
     finally:
         cleanup_temp_dir(tmp_path)
 
@@ -1769,6 +2001,269 @@ def test_build_writing_session_startup_recommends_followup_and_can_write(monkeyp
         assert written["write_performed"] is True
         assert written["sync_performed"] is True
         assert any(path.endswith("_checkpoint.md") for path in written["paths_written"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_session_write_persists_fact_snapshot_and_log(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+        runtime_root = tmp_path / "runtime"
+
+        write_file(
+            project_root / "writing-sidecar.yaml",
+            "brainstorms:\n  - logs/brainstorms\naudits:\n  - logs/audits\ndiscarded_paths: []\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** READY FOR SCRIPTING\n**Next Action:** Build the Atlantis intake sequence.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                **Phase:** SCRIPTING
+                **Chapter:** 2
+
+                ## Locked Decisions
+
+                - Keep Atlantis intake fallout localized first.
+
+                ## Threads Carried Forward
+
+                | Thread | Status | Notes |
+                |--------|--------|-------|
+                | Arthur sponsorship | ACTIVE | He still owns the intake burden |
+                """
+            ).strip(),
+        )
+        write_file(project_root / "logs" / "checkpoints" / "checkpoint.md", "startup checkpoint")
+        write_file(project_root / "logs" / "brainstorms" / "handoff.md", "physician testing sphere")
+        write_file(project_root / "logs" / "audits" / "audit.md", "Arthur sponsorship of Ciri")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [],
+            },
+        )
+        monkeypatch.setattr(
+            "writing_sidecar.workflow._mine_exported_sidecar",
+            lambda output_root, project, palace_path, runtime_root, refresh_palace=False: _ensure_dir(
+                Path(palace_path)
+            ),
+        )
+
+        written = build_writing_session(
+            vault_dir=str(project_root),
+            task="startup",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            sync="if-needed",
+            write=True,
+            n_results=2,
+        )
+
+        facts_dir = output_root / "facts"
+        assert (facts_dir / FACTS_SNAPSHOT_FILENAME).exists()
+        assert (facts_dir / FACT_LOG_FILENAME).exists()
+        assert written["fact_layer_ready"] is True
+        assert written["fact_write_performed"] is True
+        assert any(path.endswith(FACTS_SNAPSHOT_FILENAME) for path in written["fact_paths_written"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_doctor_and_projects_report_fact_layer_ready_after_write(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = default_output_dir(vault_root.resolve(), "Witcher-DC")
+        palace_root = default_palace_dir(vault_root.resolve(), "Witcher-DC")
+        runtime_root = default_runtime_dir(vault_root.resolve(), "Witcher-DC")
+
+        write_file(
+            project_root / "writing-sidecar.yaml",
+            "brainstorms:\n  - logs/brainstorms\naudits:\n  - logs/audits\ndiscarded_paths: []\n",
+        )
+        write_file(project_root / "AGENTS.md", "gateway")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** READY FOR SCRIPTING\n**Next Action:** Build the Atlantis intake sequence.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                **Phase:** SCRIPTING
+                **Chapter:** 2
+
+                ## Threads Carried Forward
+
+                | Thread | Status | Notes |
+                |--------|--------|-------|
+                | Arthur sponsorship | ACTIVE | He still owns the intake burden |
+                """
+            ).strip(),
+        )
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Atlantis intake reference")
+        write_file(project_root / "logs" / "checkpoints" / "checkpoint.md", "startup checkpoint")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [],
+            },
+        )
+        monkeypatch.setattr(
+            "writing_sidecar.workflow._mine_exported_sidecar",
+            lambda output_root, project, palace_path, runtime_root, refresh_palace=False: _ensure_dir(
+                Path(palace_path)
+            ),
+        )
+
+        build_writing_session(
+            vault_dir=str(project_root),
+            task="startup",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            sync="if-needed",
+            write=True,
+            n_results=2,
+        )
+
+        doctor = doctor_writing_sidecar(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        projects = list_writing_projects(str(vault_root))
+        project = next(item for item in projects["projects"] if item["project"] == "Witcher-DC")
+
+        assert doctor["fact_layer_ready"] is True
+        assert doctor["last_fact_sync_at"]
+        assert project["fact_layer_ready"] is True
+        assert project["last_fact_sync_at"]
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_doctor_and_projects_report_preview_timestamp_before_fact_write(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = default_output_dir(vault_root.resolve(), "Witcher-DC")
+        palace_root = default_palace_dir(vault_root.resolve(), "Witcher-DC")
+        runtime_root = default_runtime_dir(vault_root.resolve(), "Witcher-DC")
+
+        write_file(
+            project_root / "writing-sidecar.yaml",
+            "brainstorms:\n  - logs/brainstorms\naudits:\n  - logs/audits\ndiscarded_paths: []\n",
+        )
+        write_file(project_root / "AGENTS.md", "gateway")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** READY FOR SCRIPTING\n**Next Action:** Build the Atlantis intake sequence.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            textwrap.dedent(
+                """
+                **Phase:** SCRIPTING
+                **Chapter:** 2
+
+                ## Threads Carried Forward
+
+                | Thread | Status | Notes |
+                |--------|--------|-------|
+                | Arthur sponsorship | ACTIVE | He still owns the intake burden |
+                """
+            ).strip(),
+        )
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Atlantis intake reference")
+        write_file(project_root / "logs" / "checkpoints" / "checkpoint.md", "startup checkpoint")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {
+                "query": kwargs["query"],
+                "filters": {"wing": kwargs["wing"], "room": kwargs["room"]},
+                "results": [],
+            },
+        )
+        monkeypatch.setattr(
+            "writing_sidecar.workflow._mine_exported_sidecar",
+            lambda output_root, project, palace_path, runtime_root, refresh_palace=False: _ensure_dir(
+                Path(palace_path)
+            ),
+        )
+
+        verify_writing_sidecar(
+            vault_dir=str(project_root),
+            project=None,
+            scope="chapter",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            sync="if-needed",
+            n_results=2,
+        )
+
+        doctor = doctor_writing_sidecar(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        projects = list_writing_projects(str(vault_root))
+        project = next(item for item in projects["projects"] if item["project"] == "Witcher-DC")
+
+        assert doctor["fact_layer_ready"] is False
+        assert doctor["last_fact_sync_at"]
+        assert project["fact_layer_ready"] is False
+        assert project["last_fact_sync_at"]
     finally:
         cleanup_temp_dir(tmp_path)
 
