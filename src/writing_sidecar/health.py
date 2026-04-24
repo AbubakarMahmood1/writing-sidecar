@@ -13,6 +13,7 @@ HEALTH_HISTORY_FILENAME = "history.jsonl"
 HEALTH_HISTORY_LIMIT = 200
 HEALTH_SUMMARY_WINDOW = 50
 HEALTH_MIN_SAMPLES = 5
+HEALTH_LATENCY_MIN_FAMILY_SAMPLES = 3
 BACKEND_REVIEW_REASONS = {
     "sync_latency_review",
     "query_latency_review",
@@ -40,6 +41,15 @@ def health_history_path(output_root: Path) -> Path:
 
 def _ensure_dir(path: Path):
     path.mkdir(parents=True, exist_ok=True)
+
+
+def reset_health_history(output_root: Path):
+    output_root = Path(output_root).expanduser().resolve()
+    for path in (health_latest_path(output_root), health_history_path(output_root)):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
 
 
 def _load_json_document(path: Path) -> dict | None:
@@ -183,6 +193,8 @@ def _build_health_summary(output_root: Path, *, project, project_root, vault_roo
 
     reasons: list[str] = []
     for family in ("sync", "query"):
+        if command_families[family]["sample_count"] < HEALTH_LATENCY_MIN_FAMILY_SAMPLES:
+            continue
         reason = _evaluate_latency_reason(command_families[family], family=family)
         if reason:
             reasons.append(reason)

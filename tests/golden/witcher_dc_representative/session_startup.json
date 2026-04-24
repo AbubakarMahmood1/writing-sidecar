@@ -59,25 +59,25 @@
   "recent_artifacts": [
     {
       "room": "discarded_paths",
-      "path": "discarded_paths\\2026-04-09_chapter-1_discarded_structures.md",
+      "path": "discarded_paths\\<DATE>_chapter-1_discarded_structures.md",
       "mtime": "<MTIME>",
       "modified_at": "<TIMESTAMP>"
     },
     {
       "room": "audits",
-      "path": "audits\\2026-04-09_chapter-1_closeout_audit.md",
+      "path": "audits\\<DATE>_chapter-1_closeout_audit.md",
       "mtime": "<MTIME>",
       "modified_at": "<TIMESTAMP>"
     },
     {
       "room": "brainstorms",
-      "path": "brainstorms\\2026-04-09_chapter-2_atlantis-fallout_handoff.md",
+      "path": "brainstorms\\<DATE>_chapter-2_atlantis-fallout_handoff.md",
       "mtime": "<MTIME>",
       "modified_at": "<TIMESTAMP>"
     },
     {
       "room": "checkpoints",
-      "path": "checkpoints\\2026-04-15_chapter-1_session_checkpoint.md",
+      "path": "checkpoints\\<DATE>_chapter-1_session_checkpoint.md",
       "mtime": "<MTIME>",
       "modified_at": "<TIMESTAMP>"
     }
@@ -139,7 +139,7 @@
     "The next debug move is concrete rather than generic."
   ],
   "artifact_targets": [
-    "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-15_chapter-2_session_checkpoint.md"
+    "<PROJECT_ROOT>\\logs\\checkpoints\\<DATE>_chapter-2_session_checkpoint.md"
   ],
   "recommended_commands": [
     "writing-sidecar session \"<PROJECT_ROOT>\" --task startup --write",

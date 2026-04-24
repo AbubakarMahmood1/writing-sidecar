@@ -33,6 +33,7 @@ TIMESTAMP_KEYS = {
     "last_health_check_at",
 }
 TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})")
+DATE_STAMP_PATTERN = re.compile(r"\b\d{4}-\d{2}-\d{2}(?=_)")
 SHA256_PATTERN = re.compile(r"\b[a-fA-F0-9]{64}\b")
 
 
@@ -242,6 +243,7 @@ def normalize_for_snapshot(payload, context: dict):
                 normalized = normalized.replace(actual, placeholder)
                 normalized = normalized.replace(actual.replace("\\", "/"), placeholder)
             normalized = TIMESTAMP_PATTERN.sub("<TIMESTAMP>", normalized)
+            normalized = DATE_STAMP_PATTERN.sub("<DATE>", normalized)
             normalized = SHA256_PATTERN.sub("<SHA256>", normalized)
             return normalized
         return value

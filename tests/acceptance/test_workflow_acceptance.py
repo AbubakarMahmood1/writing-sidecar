@@ -846,10 +846,10 @@ def test_doctor_marks_unsupported_version(monkeypatch):
         write_file(project_root / "_story_bible" / "05_Current_Chapter_Notes.md", "**Phase:** SCRIPTING\n")
         write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
 
-        monkeypatch.setattr("writing_sidecar.workflow.get_installed_mempalace_version", lambda: "3.2.0")
+        monkeypatch.setattr("writing_sidecar.workflow.get_installed_mempalace_version", lambda: "3.4.0")
         monkeypatch.setattr(
             "writing_sidecar.workflow.ensure_supported_mempalace_version",
-            lambda: (_ for _ in ()).throw(RuntimeError("Unsupported MemPalace version: 3.2.0. Expected >=3.1,<3.2.")),
+            lambda: (_ for _ in ()).throw(RuntimeError("Unsupported MemPalace version: 3.4.0. Expected >=3.1,<3.4.")),
         )
 
         report = doctor_writing_sidecar(
@@ -2787,4 +2787,314 @@ def test_build_writing_session_scripting_and_staging_produce_distinct_packets(mo
         assert any("atmosphere" in item.lower() or "internal pressure" in item.lower() for item in staging["phase_guardrails"])
     finally:
         cleanup_temp_dir(tmp_path)
+
+
+def test_export_writing_corpus_skips_oversized_rollouts(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        codex_home = tmp_path / ".codex"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
+
+        build_codex_rollout(
+            codex_home / "sessions" / "2026" / "04" / "17" / "oversized.jsonl",
+            cwd=str(project_root),
+            user_text="Arthur sponsorship " + ("x" * 512),
+            assistant_text="Atlantis intake",
+        )
+
+        monkeypatch.setattr("writing_sidecar.workflow.ROLLOUT_SCAN_MAX_BYTES", 128)
+
+        summary = export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            codex_home=str(codex_home),
+        )
+
+        manifest = json.loads((output_root / STATE_FILENAME).read_text(encoding="utf-8"))
+        assert summary["rooms"]["chat_process"] == 0
+        assert manifest["room_counts"]["chat_process"] == 0
+        assert all(entry["source_kind"] != "codex_rollout" for entry in manifest["tracked_inputs"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_export_writing_corpus_records_mine_backend_failures(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+        runtime_root = tmp_path / "runtime"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
+
+        def broken_mine(**kwargs):
+            raise RuntimeError("Error loading hnsw index")
+
+        monkeypatch.setattr("writing_sidecar.workflow.mine", broken_mine)
+
+        summary = export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            mine_after_export=True,
+        )
+
+        assert summary["mine_skipped"] == "backend_error"
+        assert "mine backend failure" in summary["mine_warning"]
+        assert "Error loading hnsw index" in summary["mine_warning"]
+        assert (output_root / STATE_FILENAME).exists()
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_verify_writing_sidecar_survives_search_backend_failures(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+        runtime_root = tmp_path / "runtime"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** CHAPTER 3 DRAFTED\n**Next Action:** Audit the breach beats.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            "**Phase:** AUDIT\n**Chapter:** 3\n",
+        )
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        _ensure_dir(palace_root)
+
+        def broken_search(**kwargs):
+            raise MemoryError("bad allocation")
+
+        monkeypatch.setattr("writing_sidecar.workflow.search_memories", broken_search)
+
+        report = verify_writing_sidecar(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            scope="chapter",
+            sync="never",
+        )
+
+        assert report["scope"] == "chapter"
+        assert report["query_packets"] == []
+        assert any("search backend failure" in warning for warning in report["warnings"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_build_writing_automation_survives_search_backend_failures(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+        runtime_root = tmp_path / "runtime"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** CHAPTER 3 STABLE -> READY FOR CHAPTER 4\n**Next Action:** Continue the Darkseid prelude.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            "**Phase:** SCRIPTING\n**Chapter:** 4\n",
+        )
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        _ensure_dir(palace_root)
+
+        def broken_search(**kwargs):
+            raise RuntimeError("vector backend unavailable")
+
+        monkeypatch.setattr("writing_sidecar.workflow.search_memories", broken_search)
+
+        report = build_writing_automation(
+            str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            name="recommended",
+            verify_mode="skip",
+            sync="never",
+        )
+
+        assert report["name"] == "recommended"
+        assert report["routine"]
+        assert any("search backend failure" in warning for warning in report["warnings"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_build_writing_automation_skips_sidecar_queries_when_health_marks_backend_too_slow(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+        runtime_root = tmp_path / "runtime"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(
+            project_root / "_story_bible" / "05_Current_Notes.md",
+            "**Status:** CHAPTER 3 STABLE -> READY FOR CHAPTER 4\n**Next Action:** Continue the Darkseid prelude.\n",
+        )
+        write_file(
+            project_root / "_story_bible" / "05_Current_Chapter_Notes.md",
+            "**Phase:** SCRIPTING\n**Chapter:** 4\n",
+        )
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+        )
+        _ensure_dir(palace_root)
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow._cached_health_summary",
+            lambda *args, **kwargs: {
+                "health_metrics": {
+                    "command_families": {
+                        "query": {"sample_count": 3, "median_ms": 32000, "p95_ms": 51000}
+                    }
+                }
+            },
+        )
+
+        def should_not_run(**kwargs):
+            raise AssertionError("search_memories should not run when the circuit breaker is active")
+
+        monkeypatch.setattr("writing_sidecar.workflow.search_memories", should_not_run)
+
+        report = build_writing_automation(
+            str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            name="recommended",
+            verify_mode="skip",
+            sync="never",
+        )
+
+        assert any("query backend is currently too slow" in warning for warning in report["warnings"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_export_writing_corpus_refresh_palace_resets_health_history(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        palace_root = tmp_path / "palace"
+        runtime_root = tmp_path / "runtime"
+
+        write_file(project_root / "writing-sidecar.yaml", "brainstorms: []\naudits: []\ndiscarded_paths: []\n")
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
+        write_file(output_root / "health" / "latest.json", '{"health_state":"review"}')
+        write_file(output_root / "health" / "history.jsonl", '{"timestamp":"2026-04-16T00:00:00+00:00"}\n')
+
+        monkeypatch.setattr(
+            "writing_sidecar.workflow._mine_exported_sidecar",
+            lambda output_root, project, palace_path, runtime_root, refresh_palace=False: None,
+        )
+
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+            palace_path=str(palace_root),
+            runtime_root=str(runtime_root),
+            mine_after_export=True,
+            refresh_palace=True,
+        )
+
+        assert not (output_root / "health" / "latest.json").exists()
+        assert not (output_root / "health" / "history.jsonl").exists()
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+
+def test_search_writing_sidecar_fast_path_works_without_search_memories(monkeypatch):
+    import chromadb
+
+    class FakeCollection:
+        def query(self, **kwargs):
+            return {
+                "documents": [[
+                    "Arthur sponsorship and Atlantis intake.",
+                    "Checkpoint mentions Atlantis intake.",
+                ]],
+                "metadatas": [[
+                    {"wing": "witcher_dc_writing_sidecar", "room": "brainstorms", "source_file": "handoff.md"},
+                    {"wing": "witcher_dc_writing_sidecar", "room": "checkpoints", "source_file": "checkpoint.md"},
+                ]],
+                "distances": [[0.1, 0.2]],
+            }
+
+    class FakeClient:
+        def __init__(self, path):
+            self.path = path
+
+        def get_collection(self, name):
+            return FakeCollection()
+
+    monkeypatch.setattr(chromadb, "PersistentClient", FakeClient)
+    monkeypatch.setattr(
+        "writing_sidecar.workflow.search_memories",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("fallback search should not run")),
+    )
+
+    result = search_writing_sidecar(
+        query="Atlantis intake",
+        palace_path="C:/fake-palace",
+        wing="witcher_dc_writing_sidecar",
+        mode="planning",
+        n_results=2,
+    )
+
+    assert result["results"]
+    assert [hit["room"] for hit in result["results"]] == ["checkpoints", "brainstorms"]
 

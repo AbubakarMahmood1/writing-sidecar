@@ -92,6 +92,29 @@ def test_query_latency_watch_stays_watch_without_backend_review(tmp_path):
     assert summary["health_metrics"]["command_families"]["query"]["median_ms"] == 7000
 
 
+def test_single_slow_sync_sample_does_not_trigger_backend_review(tmp_path):
+    output_root = tmp_path / ".sidecars" / "demo"
+
+    _emit_health_event(
+        output_root,
+        command="sync",
+        command_family="sync",
+        duration_ms=125000,
+        sync_performed=True,
+    )
+    for _ in range(4):
+        summary = _emit_health_event(
+            output_root,
+            command="verify",
+            command_family="query",
+            duration_ms=1000,
+        )
+
+    assert summary["health_state"] == "clean"
+    assert "sync_latency_review" not in summary["health_reasons"]
+    assert summary["backend_review_due"] is False
+
+
 def test_fact_noise_review_does_not_trigger_backend_review(tmp_path):
     output_root = tmp_path / ".sidecars" / "demo"
 

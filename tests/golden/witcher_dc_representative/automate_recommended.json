@@ -29,7 +29,7 @@
     "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md"
   ],
   "artifact_targets": [
-    "<PROJECT_ROOT>\\logs\\audits\\2026-04-15_chapter-2_closeout_audit.md"
+    "<PROJECT_ROOT>\\logs\\audits\\<DATE>_chapter-2_closeout_audit.md"
   ],
   "entry_command": "writing-sidecar routine \"<PROJECT_ROOT>\" --name repair-cycle --verify advisory",
   "write_variant_command": "writing-sidecar routine \"<PROJECT_ROOT>\" --name repair-cycle --verify advisory --write",

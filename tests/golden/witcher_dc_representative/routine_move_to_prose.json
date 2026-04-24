@@ -250,7 +250,7 @@
     "<PROJECT_ROOT>\\_story_bible\\05_Current_Notes.md"
   ],
   "artifact_targets": [
-    "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-15_chapter-2_session_checkpoint.md"
+    "<PROJECT_ROOT>\\logs\\checkpoints\\<DATE>_chapter-2_session_checkpoint.md"
   ],
   "recap_sections": {
     "Continuity Watch": [

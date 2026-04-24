@@ -4,7 +4,7 @@ import importlib
 import re
 from importlib import metadata
 
-SUPPORTED_MEMPALACE_SPEC = ">=3.1,<3.2"
+SUPPORTED_MEMPALACE_SPEC = ">=3.1,<3.4"
 
 
 class MempalaceCompatibilityError(RuntimeError):
@@ -26,7 +26,7 @@ def is_supported_mempalace_version(version: str | None) -> bool:
         return False
     major = int(match.group(1))
     minor = int(match.group(2))
-    return major == 3 and minor == 1
+    return major == 3 and 1 <= minor < 4
 
 
 def ensure_supported_mempalace_version() -> str:

@@ -45,7 +45,7 @@
       "title": "Artifact carry-forward lines are missing from the active live docs",
       "summary": "Recent checkpoint/handoff/audit/discarded artifacts mention carry-forward material that is not clearly visible in the active live docs.",
       "sources": [
-        "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-12_template_checkpoint.md"
+        "<PROJECT_ROOT>\\logs\\checkpoints\\<DATE>_template_checkpoint.md"
       ],
       "evidence": [
         "Example carry-forward thread"
@@ -63,7 +63,7 @@
     "<PROJECT_ROOT>\\_story_bible\\05_Current_Chapter_Notes.md"
   ],
   "artifact_targets": [
-    "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-15_chapter-1_session_checkpoint.md"
+    "<PROJECT_ROOT>\\logs\\checkpoints\\<DATE>_chapter-1_session_checkpoint.md"
   ],
   "entry_command": "writing-sidecar routine \"<PROJECT_ROOT>\" --name start-work --verify advisory --sync never",
   "write_variant_command": "writing-sidecar routine \"<PROJECT_ROOT>\" --name start-work --verify advisory --sync never --write",

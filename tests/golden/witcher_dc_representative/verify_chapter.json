@@ -97,7 +97,7 @@
       "size": 462,
       "mtime": "<MTIME>",
       "sha256": "<SHA256>",
-      "path": "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-15_chapter-1_session_checkpoint.md",
+      "path": "<PROJECT_ROOT>\\logs\\checkpoints\\<DATE>_chapter-1_session_checkpoint.md",
       "type": "file",
       "entries": 1
     },
@@ -105,7 +105,7 @@
       "size": 278,
       "mtime": "<MTIME>",
       "sha256": "<SHA256>",
-      "path": "<PROJECT_ROOT>\\logs\\brainstorms\\2026-04-09_chapter-2_atlantis-fallout_handoff.md",
+      "path": "<PROJECT_ROOT>\\logs\\brainstorms\\<DATE>_chapter-2_atlantis-fallout_handoff.md",
       "type": "file",
       "entries": 1
     }

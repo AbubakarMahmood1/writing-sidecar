@@ -33,7 +33,7 @@
       "title": "Artifact carry-forward lines are missing from the active live docs",
       "summary": "Recent checkpoint/handoff/audit/discarded artifacts mention carry-forward material that is not clearly visible in the active live docs.",
       "sources": [
-        "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-12_template_checkpoint.md"
+        "<PROJECT_ROOT>\\logs\\checkpoints\\<DATE>_template_checkpoint.md"
       ],
       "evidence": [
         "Example carry-forward thread"
@@ -81,7 +81,7 @@
       "size": 57,
       "mtime": "<MTIME>",
       "sha256": "<SHA256>",
-      "path": "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-12_template_checkpoint.md",
+      "path": "<PROJECT_ROOT>\\logs\\checkpoints\\<DATE>_template_checkpoint.md",
       "type": "file",
       "entries": 1
     },
@@ -203,7 +203,7 @@
         "arc": null,
         "sources": [
           {
-            "path": "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-12_template_checkpoint.md",
+            "path": "<PROJECT_ROOT>\\logs\\checkpoints\\<DATE>_template_checkpoint.md",
             "source": "latest_checkpoint",
             "line": "Example carry-forward thread"
           }
@@ -215,7 +215,7 @@
       "reason": "New explicit fact extracted from the current source set.",
       "sources": [
         {
-          "path": "<PROJECT_ROOT>\\logs\\checkpoints\\2026-04-12_template_checkpoint.md",
+          "path": "<PROJECT_ROOT>\\logs\\checkpoints\\<DATE>_template_checkpoint.md",
           "source": "latest_checkpoint",
           "line": "Example carry-forward thread"
         }

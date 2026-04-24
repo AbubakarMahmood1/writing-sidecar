@@ -32,6 +32,7 @@ from .health import (
     health_command_scope,
     load_health_summary,
     record_health_event,
+    reset_health_history,
 )
 from .mempalace_adapter import (
     SUPPORTED_MEMPALACE_SPEC,
@@ -133,6 +134,11 @@ FIXED_ROOMS = (
 )
 LIVE_GATEWAY_FILES = {"AGENTS.md", "CLAUDE.md", "GEMINI.md"}
 LIVE_NOTES_FILES = {"05_Current_Notes.md", "05_Current_Chapter_Notes.md"}
+ROLLOUT_SCAN_MAX_BYTES = 16 * 1024 * 1024
+ROLLOUT_SCAN_MAX_LINES = 25000
+QUERY_BACKEND_SKIP_SAMPLE_COUNT = 3
+QUERY_BACKEND_SKIP_MEDIAN_MS = 15000
+QUERY_BACKEND_SKIP_P95_MS = 45000
 ROOM_DESCRIPTIONS = {
     "chat_process": "Normalized AI conversations and process chatter tied to this project.",
     "checkpoints": "Structured session-safe checkpoints captured during startup, planning, and closeout.",
@@ -659,6 +665,7 @@ def _new_export_summary(context: dict) -> dict:
         "palace_path": str(context["palace_path"]),
         "runtime_root": str(context["runtime_root"]),
         "mine_skipped": None,
+        "mine_warning": None,
         "last_synced_at": None,
         "stale": None,
         "stale_reasons": [],
@@ -799,13 +806,18 @@ def export_writing_corpus(
         if dry_run:
             summary["mine_skipped"] = "dry_run"
         else:
-            _mine_exported_sidecar(
+            mine_warning = _mine_exported_sidecar(
                 output_root=context["output_root"],
                 project=context["project"],
                 palace_path=context["palace_path"],
                 runtime_root=context["runtime_root"],
                 refresh_palace=refresh_palace,
             )
+            if mine_warning:
+                summary["mine_skipped"] = "backend_error"
+                summary["mine_warning"] = mine_warning
+            elif refresh_palace:
+                reset_health_history(context["output_root"])
             _write_state_manifest(context, summary, planned_entries)
 
     return summary
@@ -1034,6 +1046,8 @@ def prepare_writing_sidecar(
             palace_path=palace_path,
             runtime_root=runtime_root,
         )
+        if summary and summary.get("mine_warning"):
+            warnings.append(summary["mine_warning"])
     elif sync == "never" and status["stale"]:
         warnings.append("sidecar is stale; skipping rebuild because --sync never was used.")
 
@@ -1049,19 +1063,39 @@ def search_writing_sidecar(query: str, palace_path: str, wing: str, mode: str, n
     if mode not in SEARCH_MODE_ROOMS:
         raise ValueError(f"Unknown writing-search mode: {mode}")
 
+    fast_packet = _search_writing_sidecar_fast(
+        query=query,
+        palace_path=palace_path,
+        wing=wing,
+        mode=mode,
+        n_results=n_results,
+    )
+    if fast_packet is not None:
+        return fast_packet
+
     primary = []
     deferred = []
     seen = set()
     seen_sources = set()
     rooms = SEARCH_MODE_ROOMS[mode]
     for room in rooms:
-        results = search_memories(
-            query=query,
-            palace_path=palace_path,
-            wing=wing,
-            room=room,
-            n_results=n_results,
-        )
+        try:
+            results = search_memories(
+                query=query,
+                palace_path=palace_path,
+                wing=wing,
+                room=room,
+                n_results=n_results,
+            )
+        except Exception as exc:
+            return {
+                "query": query,
+                "wing": wing,
+                "mode": mode,
+                "room_order": list(rooms),
+                "results": [],
+                "error": _sidecar_backend_failure("search", exc, room=room),
+            }
         if results.get("error"):
             return results
         for hit in results.get("results", []):
@@ -1079,6 +1113,80 @@ def search_writing_sidecar(query: str, palace_path: str, wing: str, mode: str, n
 
     merged = (primary + deferred)[:n_results]
 
+    return {
+        "query": query,
+        "wing": wing,
+        "mode": mode,
+        "room_order": list(rooms),
+        "results": merged,
+    }
+
+
+def _search_writing_sidecar_fast(
+    query: str,
+    palace_path: str,
+    wing: str,
+    mode: str,
+    n_results: int = 5,
+) -> dict | None:
+    rooms = SEARCH_MODE_ROOMS[mode]
+    try:
+        import chromadb
+
+        client = chromadb.PersistentClient(path=palace_path)
+        col = client.get_collection("mempalace_drawers")
+        query_limit = max(n_results * max(len(rooms), 1) * 6, n_results)
+        where = {"wing": wing} if wing else None
+        kwargs = {
+            "query_texts": [query],
+            "n_results": query_limit,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where:
+            kwargs["where"] = where
+        results = col.query(**kwargs)
+    except Exception:
+        return None
+
+    docs = (results.get("documents") or [[]])[0]
+    metas = (results.get("metadatas") or [[]])[0]
+    dists = (results.get("distances") or [[]])[0]
+    allowed_rooms = set(rooms)
+    buckets = {room: [] for room in rooms}
+
+    for doc, meta, dist in zip(docs, metas, dists):
+        room_name = meta.get("room", "unknown")
+        if room_name not in allowed_rooms:
+            continue
+        buckets[room_name].append(
+            {
+                "text": doc,
+                "wing": meta.get("wing", "unknown"),
+                "room": room_name,
+                "source_file": Path(meta.get("source_file", "?")).name,
+                "similarity": round(1 - dist, 3),
+            }
+        )
+
+    primary = []
+    deferred = []
+    seen = set()
+    seen_sources = set()
+    for room in rooms:
+        for hit in buckets[room]:
+            key = (hit.get("source_file"), hit.get("text"))
+            if key in seen:
+                continue
+            seen.add(key)
+            hit["mode"] = mode
+            source_key = hit.get("source_file") or f"{room}:{len(seen)}"
+            if source_key not in seen_sources:
+                seen_sources.add(source_key)
+                primary.append(hit)
+            else:
+                deferred.append(hit)
+
+    merged = (primary + deferred)[:n_results]
     return {
         "query": query,
         "wing": wing,
@@ -5590,16 +5698,25 @@ def _run_sidecar_queries(
         )
         return []
 
+    slow_backend_warning = _sidecar_query_circuit_breaker(status)
+    if slow_backend_warning:
+        warnings.append(slow_backend_warning)
+        return []
+
     packets = []
     with _sidecar_runtime_environment(Path(status["runtime_root"])):
         for item in query_plan:
-            packet = search_writing_sidecar(
-                query=item["query"],
-                palace_path=str(palace_path),
-                wing=_project_wing(status["project"]),
-                mode=item["mode"],
-                n_results=n_results,
-            )
+            try:
+                packet = search_writing_sidecar(
+                    query=item["query"],
+                    palace_path=str(palace_path),
+                    wing=_project_wing(status["project"]),
+                    mode=item["mode"],
+                    n_results=n_results,
+                )
+            except Exception as exc:
+                warnings.append(_sidecar_backend_failure("search", exc, mode=item["mode"]))
+                continue
             if packet.get("error"):
                 warnings.append(f"Search error for {item['mode']}: {packet['error']}")
                 continue
@@ -5607,6 +5724,35 @@ def _run_sidecar_queries(
                 packet = _curate_query_packet(packet)
             packets.append(packet)
     return packets
+
+
+def _sidecar_query_circuit_breaker(status: dict) -> str | None:
+    try:
+        summary = _cached_health_summary(
+            Path(status["output_root"]),
+            project=status.get("project"),
+            project_root=status.get("project_root"),
+            vault_root=status.get("vault_root"),
+        )
+    except Exception:
+        return None
+
+    query_metrics = (summary.get("health_metrics") or {}).get("command_families", {}).get("query", {})
+    sample_count = int(query_metrics.get("sample_count") or 0)
+    median_ms = query_metrics.get("median_ms")
+    p95_ms = query_metrics.get("p95_ms")
+    if sample_count < QUERY_BACKEND_SKIP_SAMPLE_COUNT:
+        return None
+
+    median_too_slow = median_ms is not None and median_ms >= QUERY_BACKEND_SKIP_MEDIAN_MS
+    p95_too_slow = p95_ms is not None and p95_ms >= QUERY_BACKEND_SKIP_P95_MS
+    if not (median_too_slow or p95_too_slow):
+        return None
+
+    return (
+        "Skipping sidecar retrieval because the query backend is currently too slow "
+        f"(samples={sample_count}, median_ms={median_ms}, p95_ms={p95_ms})."
+    )
 
 
 def _curate_query_packet(packet: dict) -> dict:
@@ -7203,8 +7349,12 @@ def _rollout_matches_project(
     mentions_project = False
     mentions_excluded = False
     try:
+        if rollout_path.stat().st_size > ROLLOUT_SCAN_MAX_BYTES:
+            return False
         with open(rollout_path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
+            for line_number, line in enumerate(f, start=1):
+                if line_number > ROLLOUT_SCAN_MAX_LINES:
+                    break
                 try:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
@@ -7230,9 +7380,22 @@ def _rollout_matches_project(
                         mentions_project = True
                     if excluded_chat_terms and _payload_mentions_terms(payload, excluded_chat_terms):
                         mentions_excluded = True
-    except OSError:
+    except (OSError, MemoryError):
         return False
     return session_within_vault and mentions_project and not mentions_excluded
+
+
+def _sidecar_backend_failure(action: str, exc: Exception, **context) -> str:
+    details = []
+    if context.get("mode"):
+        details.append(f"mode={context['mode']}")
+    if context.get("room"):
+        details.append(f"room={context['room']}")
+    detail_suffix = f" ({', '.join(details)})" if details else ""
+    message = str(exc).strip()
+    if message:
+        return f"{action} backend failure{detail_suffix}: {type(exc).__name__}: {message}"
+    return f"{action} backend failure{detail_suffix}: {type(exc).__name__}"
 
 
 def _copy_tree_if_present(
@@ -8563,16 +8726,20 @@ def _mine_exported_sidecar(
 
     with _sidecar_runtime_environment(runtime_root):
         _ensure_dir(palace_path)
-        mine(
-            project_dir=str(output_root),
-            palace_path=str(palace_path),
-            wing_override=_project_wing(project),
-            agent="writing_sidecar",
-            limit=0,
-            dry_run=False,
-            respect_gitignore=True,
-            include_ignored=[],
-        )
+        try:
+            mine(
+                project_dir=str(output_root),
+                palace_path=str(palace_path),
+                wing_override=_project_wing(project),
+                agent="writing_sidecar",
+                limit=0,
+                dry_run=False,
+                respect_gitignore=True,
+                include_ignored=[],
+            )
+        except Exception as exc:
+            return _sidecar_backend_failure("mine", exc)
+    return None
 
 
 def _payload_mentions_project(payload: dict, project_root: Path, project_terms: list) -> bool:

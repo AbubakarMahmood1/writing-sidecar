@@ -7,18 +7,18 @@
   "runtime_root": "<RUNTIME_ROOT>",
   "codex_home": "<CODEX_HOME>",
   "config_path": "<PROJECT_ROOT>\\writing-sidecar.yaml",
-  "mempalace_version": "3.1.0",
-  "supported_spec": ">=3.1,<3.2",
+  "mempalace_version": "3.3.2",
+  "supported_spec": ">=3.1,<3.4",
   "checks": [
     {
       "name": "mempalace_installed",
       "status": "ok",
-      "detail": "MemPalace 3.1.0 is installed."
+      "detail": "MemPalace 3.3.2 is installed."
     },
     {
       "name": "mempalace_version",
       "status": "ok",
-      "detail": "Supported MemPalace version detected (3.1.0, expected >=3.1,<3.2)."
+      "detail": "Supported MemPalace version detected (3.3.2, expected >=3.1,<3.4)."
     },
     {
       "name": "codex_home",
