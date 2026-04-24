@@ -10,6 +10,7 @@ story bible or active chapter files.
 from __future__ import annotations
 
 import json
+import copy
 import os
 import re
 import shutil
@@ -54,14 +55,31 @@ FACTS_DIRNAME = "facts"
 FACTS_SNAPSHOT_FILENAME = "facts_snapshot.json"
 FACT_LOG_FILENAME = "fact_log.jsonl"
 FACT_PREVIEW_FILENAME = "reconcile_preview.json"
-STATE_VERSION = 1
+STATE_VERSION = 3
+DOCUMENT_ID_VERSION = 1
+DOCUMENT_TAG_VERSION = 1
 SEARCH_MODE_ROOMS = {
     "planning": ("checkpoints", "brainstorms", "discarded_paths", "audits", "chat_process"),
     "audit": ("audits", "discarded_paths", "checkpoints", "chat_process", "archived_notes"),
     "history": ("checkpoints", "audits", "brainstorms", "discarded_paths", "chat_process"),
     "research": ("research", "archived_notes"),
+    "full": (
+        "checkpoints",
+        "brainstorms",
+        "audits",
+        "discarded_paths",
+        "research",
+        "archived_notes",
+        "chat_process",
+    ),
 }
 RETRIEVAL_BUDGETS = ("quick", "normal", "deep")
+RETRIEVAL_PROFILES = ("query", "profile", "full")
+RETRIEVAL_PROFILE_DEFAULTS = {
+    "query": {"mode": "planning", "budget": "normal"},
+    "profile": {"mode": "history", "budget": "normal"},
+    "full": {"mode": "full", "budget": "deep"},
+}
 RETRIEVAL_BUDGET_CANDIDATE_MULTIPLIERS = {
     "quick": 3,
     "normal": 6,
@@ -1080,6 +1098,18 @@ def _retrieval_room_limit(n_results: int, budget: str) -> int:
     return max(n_results * multiplier, n_results)
 
 
+def _resolve_retrieval_profile(
+    profile: str | None,
+    mode: str | None,
+    budget: str | None,
+) -> tuple[str, str, str | None]:
+    if profile is not None and profile not in RETRIEVAL_PROFILES:
+        raise ValueError(f"Unknown retrieval profile: {profile}")
+    resolved_profile = profile or "query"
+    defaults = RETRIEVAL_PROFILE_DEFAULTS[resolved_profile]
+    return mode or defaults["mode"], budget or defaults["budget"], profile
+
+
 def _query_terms(query: str) -> list[str]:
     return [term for term in re.findall(r"[a-z0-9]+", query.lower()) if len(term) >= 2]
 
@@ -1188,11 +1218,13 @@ def search_writing_sidecar(
     query: str,
     palace_path: str,
     wing: str,
-    mode: str,
+    mode: str | None,
     n_results: int = 5,
-    budget: str = "normal",
+    budget: str | None = None,
     sidecar_root: str | None = None,
+    profile: str | None = None,
 ) -> dict:
+    mode, budget, explicit_profile = _resolve_retrieval_profile(profile, mode, budget)
     if mode not in SEARCH_MODE_ROOMS:
         raise ValueError(f"Unknown writing-search mode: {mode}")
     if budget not in RETRIEVAL_BUDGETS:
@@ -1223,6 +1255,8 @@ def search_writing_sidecar(
                 n_results,
                 mode,
             )
+        if explicit_profile:
+            fast_packet["profile"] = explicit_profile
         return fast_packet
 
     primary = []
@@ -1250,6 +1284,8 @@ def search_writing_sidecar(
             }
             if budget != "normal":
                 error_packet["budget"] = budget
+            if explicit_profile:
+                error_packet["profile"] = explicit_profile
             return error_packet
         if results.get("error"):
             return results
@@ -1277,6 +1313,8 @@ def search_writing_sidecar(
     }
     if budget != "normal":
         packet["budget"] = budget
+    if explicit_profile:
+        packet["profile"] = explicit_profile
     return packet
 
 
@@ -5852,6 +5890,7 @@ def _run_sidecar_queries(
     n_results: int,
     warnings: list[str],
     curated_for_context: bool = False,
+    search_cache: dict | None = None,
 ) -> list[dict]:
     palace_path = Path(status["palace_path"])
     if not palace_path.exists():
@@ -5866,23 +5905,38 @@ def _run_sidecar_queries(
         return []
 
     packets = []
+    cache = search_cache if search_cache is not None else {}
     with _sidecar_runtime_environment(Path(status["runtime_root"])):
         for item in query_plan:
+            cache_key = (
+                str(palace_path.resolve()),
+                str(Path(status["output_root"]).expanduser().resolve()),
+                status["project"],
+                item["mode"],
+                item["query"],
+                n_results,
+            )
             try:
-                packet = search_writing_sidecar(
-                    query=item["query"],
-                    palace_path=str(palace_path),
-                    wing=_project_wing(status["project"]),
-                    mode=item["mode"],
-                    n_results=n_results,
-                    sidecar_root=status["output_root"],
-                )
+                cache_hit = cache_key in cache
+                if cache_key in cache:
+                    packet = copy.deepcopy(cache[cache_key])
+                else:
+                    packet = search_writing_sidecar(
+                        query=item["query"],
+                        palace_path=str(palace_path),
+                        wing=_project_wing(status["project"]),
+                        mode=item["mode"],
+                        n_results=n_results,
+                        sidecar_root=status["output_root"],
+                    )
             except Exception as exc:
                 warnings.append(_sidecar_backend_failure("search", exc, mode=item["mode"]))
                 continue
             if packet.get("error"):
                 warnings.append(f"Search error for {item['mode']}: {packet['error']}")
                 continue
+            if not cache_hit:
+                cache[cache_key] = copy.deepcopy(packet)
             if curated_for_context:
                 packet = _curate_query_packet(packet)
             packets.append(packet)
@@ -7721,6 +7775,48 @@ def _project_wing(project: str) -> str:
     return f"{_project_slug(project)}_writing_sidecar"
 
 
+def _document_identity_source_path(source_path: Path, context: dict) -> str:
+    source_path = Path(source_path).expanduser().resolve()
+    identity_roots = (
+        ("project", context.get("project_root")),
+        ("vault", context.get("vault_root")),
+        ("codex", context.get("codex_root")),
+    )
+    for label, root in identity_roots:
+        if not root:
+            continue
+        try:
+            relative = source_path.relative_to(Path(root).expanduser().resolve()).as_posix()
+        except ValueError:
+            continue
+        return f"{label}:{relative}".lower()
+    return f"path:{_normalized_path(source_path)}"
+
+
+def _stable_document_id(context: dict, entry: dict) -> str:
+    identity = "\n".join(
+        [
+            str(DOCUMENT_ID_VERSION),
+            context["project"],
+            entry["room"],
+            entry["source_kind"],
+            _document_identity_source_path(Path(entry["source_path"]), context),
+        ]
+    )
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+    return f"{_project_slug(context['project'])}:{entry['room']}:{entry['source_kind']}:{digest}"
+
+
+def _stable_document_tags(context: dict, entry: dict) -> list[str]:
+    identity_scope = _document_identity_source_path(Path(entry["source_path"]), context).split(":", 1)[0]
+    return [
+        f"project:{_project_slug(context['project'])}",
+        f"room:{entry['room']}",
+        f"source_kind:{entry['source_kind']}",
+        f"source_scope:{identity_scope}",
+    ]
+
+
 def _build_project_terms(project: str, project_root: Path, extra_terms: list) -> list:
     terms = {
         project,
@@ -7752,6 +7848,10 @@ def _write_state_manifest(context: dict, summary: dict, planned_entries: list):
     ):
         source_path = Path(entry["source_path"])
         tracked = dict(entry)
+        tracked["document_id"] = _stable_document_id(context, entry)
+        tracked["document_id_version"] = DOCUMENT_ID_VERSION
+        tracked["document_tags"] = _stable_document_tags(context, entry)
+        tracked["document_tag_version"] = DOCUMENT_TAG_VERSION
         tracked.update(_describe_file(source_path))
         tracked_inputs.append(tracked)
 

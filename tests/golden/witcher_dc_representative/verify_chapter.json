@@ -46,7 +46,7 @@
   ],
   "source_snapshot": [
     {
-      "size": 4908,
+      "size": 6444,
       "mtime": "<MTIME>",
       "sha256": "<SHA256>",
       "path": "<OUTPUT_ROOT>\\.writing-sidecar-state.json",

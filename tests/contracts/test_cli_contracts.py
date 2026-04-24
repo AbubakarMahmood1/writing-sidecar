@@ -328,7 +328,7 @@ def test_cli_json_output_for_status_context_projects_doctor_session_verify_and_a
     finally:
         cleanup_temp_dir(tmp_path)
 
-def test_cli_search_and_sync_accept_retrieval_budget():
+def test_cli_search_and_sync_accept_retrieval_budget_and_profile():
     import writing_sidecar.cli as cli
 
     parser = cli.build_parser()
@@ -340,6 +340,8 @@ def test_cli_search_and_sync_accept_retrieval_budget():
             "Witcher-DC",
             "--query",
             "chapter six",
+            "--profile",
+            "full",
             "--budget",
             "deep",
         ]
@@ -354,12 +356,16 @@ def test_cli_search_and_sync_accept_retrieval_budget():
             "chapter six",
             "--mode",
             "planning",
+            "--profile",
+            "profile",
             "--budget",
             "quick",
         ]
     )
 
+    assert search_args.profile == "full"
     assert search_args.budget == "deep"
+    assert sync_args.profile == "profile"
     assert sync_args.budget == "quick"
 
 def test_cli_context_recap_session_verify_bundle_routine_and_automate_support_out_files(monkeypatch):

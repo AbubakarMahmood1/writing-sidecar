@@ -19,6 +19,7 @@ from .workflow import (
     MAINTAIN_KINDS,
     RECAP_MODES,
     RETRIEVAL_BUDGETS,
+    RETRIEVAL_PROFILES,
     ROUTINE_NAMES,
     SEARCH_MODE_ROOMS,
     SESSION_TASKS,
@@ -26,6 +27,7 @@ from .workflow import (
     _record_health_for_status,
     _ensure_dir,
     _project_wing,
+    _resolve_retrieval_profile,
     _sidecar_runtime_environment,
     build_writing_context,
     build_writing_recap,
@@ -298,14 +300,16 @@ def cmd_search(args):
             raise SystemExit(1)
 
         with _sidecar_runtime_environment(Path(status["runtime_root"])):
+            mode, budget, _ = _resolve_retrieval_profile(args.profile, args.mode, args.budget)
             results = search_writing_sidecar(
                 query=args.query,
                 palace_path=str(palace_path),
                 wing=_project_wing(status["project"]),
-                mode=args.mode,
+                mode=mode,
                 n_results=args.results,
-                budget=args.budget,
+                budget=budget,
                 sidecar_root=status["output_root"],
+                profile=args.profile,
             )
 
         if results.get("error"):
@@ -363,15 +367,17 @@ def cmd_sync(args):
             raise SystemExit(1)
 
         with _sidecar_runtime_environment(Path(status["runtime_root"])):
-            if args.mode:
+            if args.mode or args.profile:
+                mode, budget, _ = _resolve_retrieval_profile(args.profile, args.mode, args.budget)
                 results = search_writing_sidecar(
                     query=args.query,
                     palace_path=str(palace_path),
                     wing=_project_wing(status["project"]),
-                    mode=args.mode,
+                    mode=mode,
                     n_results=args.results,
-                    budget=args.budget,
+                    budget=budget,
                     sidecar_root=status["output_root"],
+                    profile=args.profile,
                 )
                 if results.get("error"):
                     print(f"\n  Search error: {results['error']}")
@@ -708,8 +714,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument(
         "--mode",
         choices=sorted(SEARCH_MODE_ROOMS.keys()),
-        default="planning",
-        help="Intent mode used to prioritize sidecar rooms (default: planning)",
+        default=None,
+        help="Intent mode used to prioritize sidecar rooms (default: selected by --profile, usually planning)",
+    )
+    p_search.add_argument(
+        "--profile",
+        choices=RETRIEVAL_PROFILES,
+        default=None,
+        help="Named retrieval profile: query=planning/normal, profile=history/normal, full=all rooms/deep",
     )
     p_search.add_argument(
         "--sync",
@@ -726,8 +738,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument(
         "--budget",
         choices=RETRIEVAL_BUDGETS,
-        default="normal",
-        help="Retrieval depth before final result trimming (default: normal)",
+        default=None,
+        help="Retrieval depth before final result trimming (default: selected by --profile, usually normal)",
     )
     _add_format_arg(p_search)
 
@@ -747,13 +759,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Intent-aware search mode for the optional post-sync query",
     )
+    p_sync.add_argument(
+        "--profile",
+        choices=RETRIEVAL_PROFILES,
+        default=None,
+        help="Named retrieval profile for the optional post-sync query",
+    )
     p_sync.add_argument("--room", default=None, help="Optional room filter for the post-sync search")
     p_sync.add_argument("--results", type=int, default=5, help="Number of post-sync search results to show")
     p_sync.add_argument(
         "--budget",
         choices=RETRIEVAL_BUDGETS,
-        default="normal",
-        help="Retrieval depth before final result trimming for intent-aware post-sync search (default: normal)",
+        default=None,
+        help="Retrieval depth before final result trimming for intent-aware post-sync search",
     )
 
     p_doctor = sub.add_parser("doctor", help="Verify MemPalace compatibility and sidecar path health")

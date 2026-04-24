@@ -24,6 +24,7 @@ from writing_sidecar.workflow import (
     maintain_writing_sidecar,
     SEARCH_MODE_ROOMS,
     _ensure_dir,
+    _run_sidecar_queries,
     doctor_writing_sidecar,
     discover_sidecar_projects,
     default_output_dir,
@@ -128,6 +129,19 @@ def test_export_writing_corpus_writes_manifest_and_curates_rooms():
         assert all(entry["size"] > 0 for entry in manifest["tracked_inputs"])
         assert all(entry["mtime"] for entry in manifest["tracked_inputs"])
         assert all(len(entry["sha256"]) == 64 for entry in manifest["tracked_inputs"])
+        document_ids = [entry["document_id"] for entry in manifest["tracked_inputs"]]
+        assert len(document_ids) == len(set(document_ids))
+        assert all(entry["document_id_version"] == 1 for entry in manifest["tracked_inputs"])
+        assert all(document_id.startswith("witcher_dc:") for document_id in document_ids)
+        assert all(entry["document_tag_version"] == 1 for entry in manifest["tracked_inputs"])
+        assert all("project:witcher_dc" in entry["document_tags"] for entry in manifest["tracked_inputs"])
+        assert all(
+            f"room:{entry['room']}" in entry["document_tags"] for entry in manifest["tracked_inputs"]
+        )
+        assert all(
+            f"source_kind:{entry['source_kind']}" in entry["document_tags"]
+            for entry in manifest["tracked_inputs"]
+        )
         assert summary["rooms"]["audits"] == 0
         assert summary["runtime_root"] == str(default_runtime_dir(vault_root.resolve(), "Witcher-DC"))
         assert str(project_root / "_story_bible" / "05_Current_Notes.md") in summary["skipped_live_files"]
@@ -143,6 +157,39 @@ def test_export_writing_corpus_writes_manifest_and_curates_rooms():
         assert status["built"] is True
         assert status["stale"] is True
         assert any(item["reason"] == "palace_missing" for item in status["stale_reasons"])
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+def test_export_manifest_document_ids_survive_source_content_changes():
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "Witcher-DC"
+        output_root = tmp_path / "sidecar"
+        research_file = project_root / "_story_bible" / "research" / "dc.md"
+
+        write_file(research_file, "Apokolips research")
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+        )
+        first_manifest = json.loads((output_root / STATE_FILENAME).read_text(encoding="utf-8"))
+        first_entry = first_manifest["tracked_inputs"][0]
+
+        write_file(research_file, "Apokolips research revised")
+        export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(output_root),
+        )
+        second_manifest = json.loads((output_root / STATE_FILENAME).read_text(encoding="utf-8"))
+        second_entry = second_manifest["tracked_inputs"][0]
+
+        assert first_entry["source_path"] == second_entry["source_path"]
+        assert first_entry["document_id"] == second_entry["document_id"]
+        assert first_entry["document_tags"] == second_entry["document_tags"]
+        assert first_entry["sha256"] != second_entry["sha256"]
     finally:
         cleanup_temp_dir(tmp_path)
 
@@ -345,6 +392,7 @@ def test_writing_status_detects_input_changed_added_and_missing():
         ("audit", list(SEARCH_MODE_ROOMS["audit"])),
         ("history", list(SEARCH_MODE_ROOMS["history"])),
         ("research", list(SEARCH_MODE_ROOMS["research"])),
+        ("full", list(SEARCH_MODE_ROOMS["full"])),
     ],
 )
 def test_writing_search_modes_preserve_room_priority(mode, expected_rooms, monkeypatch):
@@ -461,6 +509,59 @@ def test_writing_search_budget_controls_backend_depth(monkeypatch):
     assert calls
     assert {call["n_results"] for call in calls} == {6}
 
+def test_writing_search_profiles_map_to_existing_knobs(monkeypatch):
+    calls = []
+
+    def fake_search_memories(query, palace_path, wing=None, room=None, n_results=5):
+        calls.append({"room": room, "n_results": n_results})
+        return {
+            "query": query,
+            "filters": {"wing": wing, "room": room},
+            "results": [
+                {
+                    "room": room,
+                    "source_file": f"{room}.md",
+                    "similarity": 0.9,
+                    "text": f"{room} hit",
+                }
+            ],
+        }
+
+    monkeypatch.setattr("writing_sidecar.workflow._search_writing_sidecar_fast", lambda **kwargs: None)
+    monkeypatch.setattr("writing_sidecar.workflow.search_memories", fake_search_memories)
+
+    result = search_writing_sidecar(
+        query="chapter six handoff",
+        palace_path="C:/fake-palace",
+        wing="witcher_dc_writing_sidecar",
+        mode=None,
+        n_results=2,
+        profile="full",
+    )
+
+    assert result["profile"] == "full"
+    assert result["mode"] == "full"
+    assert result["budget"] == "deep"
+    assert [call["room"] for call in calls] == list(SEARCH_MODE_ROOMS["full"])
+    assert {call["n_results"] for call in calls} == {4}
+
+    calls.clear()
+    overridden = search_writing_sidecar(
+        query="chapter six handoff",
+        palace_path="C:/fake-palace",
+        wing="witcher_dc_writing_sidecar",
+        mode="research",
+        n_results=2,
+        budget="quick",
+        profile="full",
+    )
+
+    assert overridden["profile"] == "full"
+    assert overridden["mode"] == "research"
+    assert overridden["budget"] == "quick"
+    assert [call["room"] for call in calls] == list(SEARCH_MODE_ROOMS["research"])
+    assert {call["n_results"] for call in calls} == {2}
+
 def test_writing_search_blends_local_keyword_hits(monkeypatch):
     tmp_path = make_temp_dir()
     try:
@@ -489,6 +590,57 @@ def test_writing_search_blends_local_keyword_hits(monkeypatch):
         assert result["results"][0]["source_file"] == "2026-04-24_chapter-6_no_private_fronts_handoff.md"
         assert result["results"][0]["match_type"] == "keyword"
         assert "Batman, Diana, Arthur, and Hal" in result["results"][0]["text"]
+    finally:
+        cleanup_temp_dir(tmp_path)
+
+def test_run_sidecar_queries_reuses_duplicate_queries(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        palace_root = tmp_path / "palace"
+        output_root = tmp_path / "sidecar"
+        runtime_root = tmp_path / "runtime"
+        _ensure_dir(palace_root)
+        _ensure_dir(output_root)
+        _ensure_dir(runtime_root)
+        calls = []
+
+        def fake_search_writing_sidecar(**kwargs):
+            calls.append(kwargs)
+            return {
+                "query": kwargs["query"],
+                "wing": kwargs["wing"],
+                "mode": kwargs["mode"],
+                "room_order": ["checkpoints"],
+                "results": [
+                    {
+                        "room": "checkpoints",
+                        "source_file": "checkpoint.md",
+                        "similarity": 0.9,
+                        "text": "cached hit",
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("writing_sidecar.workflow.search_writing_sidecar", fake_search_writing_sidecar)
+        monkeypatch.setattr("writing_sidecar.workflow._sidecar_query_circuit_breaker", lambda status: None)
+
+        status = {
+            "project": "Witcher-DC",
+            "palace_path": str(palace_root),
+            "output_root": str(output_root),
+            "runtime_root": str(runtime_root),
+        }
+        query_plan = [
+            {"mode": "planning", "query": "same query"},
+            {"mode": "planning", "query": "same query"},
+        ]
+
+        packets = _run_sidecar_queries(status, query_plan, n_results=3, warnings=[])
+
+        assert len(calls) == 1
+        assert len(packets) == 2
+        packets[0]["results"][0]["text"] = "mutated"
+        assert packets[1]["results"][0]["text"] == "cached hit"
     finally:
         cleanup_temp_dir(tmp_path)
 

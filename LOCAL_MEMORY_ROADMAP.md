@@ -6,14 +6,15 @@
 
 - Retrieval budget: `search --budget quick|normal|deep` separates search depth from final result count, mirroring Hindsight-style budget control without adopting its backend.
 - Local keyword lane: `--budget deep` blends filename/title/text keyword hits with vector hits so obvious handoff, chapter, and named-thread lookups are not lost to semantic ranking.
+- Stable sidecar document IDs: exported inputs now get deterministic manifest-level `document_id` values based on project, room, source kind, and stable source path so content edits do not create a new identity inside sidecar state.
+- Named retrieval profiles: `search --profile query|profile|full` now maps common intent levels onto existing mode and budget knobs without adding a new backend.
+- Query-batch cache: repeated sidecar searches inside a single helper query batch are deep-copied from a local cache instead of hitting the backend twice.
+- Fixed document-tag vocabulary: manifest entries now carry local-only `project`, `room`, `source_kind`, and `source_scope` tags for future filters without making extracted memory authoritative.
 
 ## Worth Stealing Next
 
-- Stable document IDs for sidecar exports so long-running session/chapter artifacts can be updated without duplicate memory buildup.
-- Named retrieval profiles, such as `profile`, `query`, and `full`, mapped onto writing-sidecar's existing context/search modes.
-- Per-turn or per-command retrieval cache so multi-step workflows do not repeat identical local searches.
 - Curated mental-model style packets for durable summaries like current chapter state, ARGUS doctrine, Ciri power logic, and discarded paths.
-- Stricter tag vocabulary for project, chapter, phase, room, and artifact type.
+- Backend upsert wiring if MemPalace exposes a safe local ID hook; until then, stable IDs stay sidecar-side rather than forcing a migration.
 
 ## Migration Triggers
 
