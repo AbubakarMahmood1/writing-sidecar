@@ -1,6 +1,6 @@
 # Writing Sidecar
 
-`writing-sidecar` is a standalone companion package for CDLC writing projects that use [MemPalace](https://github.com/milla-jovovich/mempalace) as the mining and retrieval engine.
+`writing-sidecar` is a standalone companion package for CDLC writing projects that use [MemPalace](https://github.com/MemPalace/mempalace) as the mining and retrieval engine.
 
 It keeps process memory separate from canon:
 
@@ -12,8 +12,8 @@ It keeps process memory separate from canon:
 
 Tested target:
 
-- Python `3.11` or `3.12`
-- MemPalace `>=3.1,<3.2`
+- Python `>=3.9,<3.15`
+- MemPalace `>=3.1,<3.4`
 
 ```bash
 pip install mempalace
@@ -29,10 +29,9 @@ pip install -e /path/to/writing-sidecar[dev]
 
 Windows note:
 
-- Python `3.14` is not a supported install target for v1
+- Python `3.14` is supported by the current sidecar package and test suite
 - a clean install may still pull a `chroma-hnswlib` build path through MemPalace/Chroma
-- on Windows, use Python `3.11` or `3.12` unless you intentionally want to manage native build-tool fallout yourself
-- if you still hit the native build path, either install the needed C++ build tools or reuse an environment where MemPalace's existing dependencies already work
+- on Windows, if native dependency installs fail, either install the needed C++ build tools or reuse an environment where MemPalace's existing dependencies already work
 - `writing-sidecar doctor` checks runtime health after install, but it cannot bypass native wheel/build issues during `pip install`
 
 ## Commands
