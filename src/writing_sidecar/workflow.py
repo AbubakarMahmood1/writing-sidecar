@@ -61,6 +61,17 @@ SEARCH_MODE_ROOMS = {
     "history": ("checkpoints", "audits", "brainstorms", "discarded_paths", "chat_process"),
     "research": ("research", "archived_notes"),
 }
+RETRIEVAL_BUDGETS = ("quick", "normal", "deep")
+RETRIEVAL_BUDGET_CANDIDATE_MULTIPLIERS = {
+    "quick": 3,
+    "normal": 6,
+    "deep": 12,
+}
+RETRIEVAL_BUDGET_ROOM_LIMIT_MULTIPLIERS = {
+    "quick": 1,
+    "normal": 1,
+    "deep": 2,
+}
 CONTEXT_MODES = ("startup", "planning", "audit", "history", "research")
 RECAP_MODES = ("restart", "handoff", "continuity")
 MAINTAIN_KINDS = ("checkpoint", "audit", "handoff", "discarded", "closeout")
@@ -1059,9 +1070,142 @@ def prepare_writing_sidecar(
     }
 
 
-def search_writing_sidecar(query: str, palace_path: str, wing: str, mode: str, n_results: int = 5) -> dict:
+def _retrieval_candidate_limit(n_results: int, room_count: int, budget: str) -> int:
+    multiplier = RETRIEVAL_BUDGET_CANDIDATE_MULTIPLIERS[budget]
+    return max(n_results * max(room_count, 1) * multiplier, n_results)
+
+
+def _retrieval_room_limit(n_results: int, budget: str) -> int:
+    multiplier = RETRIEVAL_BUDGET_ROOM_LIMIT_MULTIPLIERS[budget]
+    return max(n_results * multiplier, n_results)
+
+
+def _query_terms(query: str) -> list[str]:
+    return [term for term in re.findall(r"[a-z0-9]+", query.lower()) if len(term) >= 2]
+
+
+def _keyword_preview(text: str, terms: Sequence[str], query: str, max_chars: int = 700) -> str:
+    lowered = text.lower()
+    phrase = query.lower().strip()
+    indexes = [lowered.find(phrase)] if phrase else []
+    indexes.extend(lowered.find(term) for term in terms)
+    indexes = [index for index in indexes if index >= 0]
+    if not indexes:
+        return text[:max_chars].strip()
+    start = max(min(indexes) - 120, 0)
+    end = min(start + max_chars, len(text))
+    return text[start:end].strip()
+
+
+def _keyword_score(query: str, terms: Sequence[str], path: Path, text: str) -> int:
+    lowered_text = text.lower()
+    lowered_name = path.name.lower()
+    lowered_query = query.lower().strip()
+    score = 0
+    if lowered_query and lowered_query in lowered_text:
+        score += 12
+    if lowered_query and lowered_query in lowered_name:
+        score += 18
+    for term in terms:
+        if term in lowered_name:
+            score += 4
+        count = lowered_text.count(term)
+        if count:
+            score += min(count, 5)
+    return score
+
+
+def _keyword_search_sidecar_files(
+    query: str,
+    sidecar_root: str | None,
+    rooms: Sequence[str],
+    wing: str,
+    n_results: int,
+    budget: str,
+) -> list[dict]:
+    if budget != "deep":
+        return []
+    if not sidecar_root:
+        return []
+    root = Path(sidecar_root).expanduser().resolve()
+    if not root.exists():
+        return []
+    terms = _query_terms(query)
+    if not terms:
+        return []
+
+    candidate_limit = _retrieval_room_limit(n_results, budget)
+    hits: list[dict] = []
+    for room_index, room in enumerate(rooms):
+        room_dir = root / room
+        if not room_dir.exists():
+            continue
+        for path in sorted(item for item in room_dir.rglob("*") if item.is_file()):
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            score = _keyword_score(query, terms, path, text)
+            if score <= 0:
+                continue
+            hits.append(
+                {
+                    "text": _keyword_preview(text, terms, query),
+                    "wing": wing,
+                    "room": room,
+                    "source_file": path.name,
+                    "similarity": round(min(0.99, 0.55 + (score * 0.02)), 3),
+                    "match_type": "keyword",
+                    "_keyword_score": score,
+                    "_room_index": room_index,
+                }
+            )
+
+    hits.sort(key=lambda hit: (-hit["_keyword_score"], hit["_room_index"], hit["source_file"]))
+    for hit in hits:
+        hit.pop("_keyword_score", None)
+        hit.pop("_room_index", None)
+        hit["mode"] = None
+    return hits[:candidate_limit]
+
+
+def _merge_search_hits(keyword_hits: list[dict], vector_hits: list[dict], n_results: int, mode: str) -> list[dict]:
+    merged: list[dict] = []
+    seen = set()
+    for hit in keyword_hits + vector_hits:
+        key = (hit.get("source_file"), hit.get("text"))
+        if key in seen:
+            continue
+        seen.add(key)
+        hit["mode"] = mode
+        merged.append(hit)
+        if len(merged) >= n_results:
+            break
+    return merged
+
+
+def search_writing_sidecar(
+    query: str,
+    palace_path: str,
+    wing: str,
+    mode: str,
+    n_results: int = 5,
+    budget: str = "normal",
+    sidecar_root: str | None = None,
+) -> dict:
     if mode not in SEARCH_MODE_ROOMS:
         raise ValueError(f"Unknown writing-search mode: {mode}")
+    if budget not in RETRIEVAL_BUDGETS:
+        raise ValueError(f"Unknown retrieval budget: {budget}")
+    rooms = SEARCH_MODE_ROOMS[mode]
+    keyword_hits = _keyword_search_sidecar_files(
+        query=query,
+        sidecar_root=sidecar_root,
+        rooms=rooms,
+        wing=wing,
+        n_results=n_results,
+        budget=budget,
+    )
 
     fast_packet = _search_writing_sidecar_fast(
         query=query,
@@ -1069,15 +1213,23 @@ def search_writing_sidecar(query: str, palace_path: str, wing: str, mode: str, n
         wing=wing,
         mode=mode,
         n_results=n_results,
+        budget=budget,
     )
     if fast_packet is not None:
+        if keyword_hits:
+            fast_packet["results"] = _merge_search_hits(
+                keyword_hits,
+                fast_packet.get("results", []),
+                n_results,
+                mode,
+            )
         return fast_packet
 
     primary = []
     deferred = []
     seen = set()
     seen_sources = set()
-    rooms = SEARCH_MODE_ROOMS[mode]
+    room_limit = _retrieval_room_limit(n_results, budget)
     for room in rooms:
         try:
             results = search_memories(
@@ -1085,10 +1237,10 @@ def search_writing_sidecar(query: str, palace_path: str, wing: str, mode: str, n
                 palace_path=palace_path,
                 wing=wing,
                 room=room,
-                n_results=n_results,
+                n_results=room_limit,
             )
         except Exception as exc:
-            return {
+            error_packet = {
                 "query": query,
                 "wing": wing,
                 "mode": mode,
@@ -1096,6 +1248,9 @@ def search_writing_sidecar(query: str, palace_path: str, wing: str, mode: str, n
                 "results": [],
                 "error": _sidecar_backend_failure("search", exc, room=room),
             }
+            if budget != "normal":
+                error_packet["budget"] = budget
+            return error_packet
         if results.get("error"):
             return results
         for hit in results.get("results", []):
@@ -1111,15 +1266,18 @@ def search_writing_sidecar(query: str, palace_path: str, wing: str, mode: str, n
             else:
                 deferred.append(hit)
 
-    merged = (primary + deferred)[:n_results]
+    merged = _merge_search_hits(keyword_hits, primary + deferred, n_results, mode)
 
-    return {
+    packet = {
         "query": query,
         "wing": wing,
         "mode": mode,
         "room_order": list(rooms),
         "results": merged,
     }
+    if budget != "normal":
+        packet["budget"] = budget
+    return packet
 
 
 def _search_writing_sidecar_fast(
@@ -1128,6 +1286,7 @@ def _search_writing_sidecar_fast(
     wing: str,
     mode: str,
     n_results: int = 5,
+    budget: str = "normal",
 ) -> dict | None:
     rooms = SEARCH_MODE_ROOMS[mode]
     try:
@@ -1135,7 +1294,7 @@ def _search_writing_sidecar_fast(
 
         client = chromadb.PersistentClient(path=palace_path)
         col = client.get_collection("mempalace_drawers")
-        query_limit = max(n_results * max(len(rooms), 1) * 6, n_results)
+        query_limit = _retrieval_candidate_limit(n_results, len(rooms), budget)
         where = {"wing": wing} if wing else None
         kwargs = {
             "query_texts": [query],
@@ -1187,13 +1346,16 @@ def _search_writing_sidecar_fast(
                 deferred.append(hit)
 
     merged = (primary + deferred)[:n_results]
-    return {
+    packet = {
         "query": query,
         "wing": wing,
         "mode": mode,
         "room_order": list(rooms),
         "results": merged,
     }
+    if budget != "normal":
+        packet["budget"] = budget
+    return packet
 
 
 def print_writing_search_results(search_data: dict):
@@ -5713,6 +5875,7 @@ def _run_sidecar_queries(
                     wing=_project_wing(status["project"]),
                     mode=item["mode"],
                     n_results=n_results,
+                    sidecar_root=status["output_root"],
                 )
             except Exception as exc:
                 warnings.append(_sidecar_backend_failure("search", exc, mode=item["mode"]))

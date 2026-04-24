@@ -425,6 +425,73 @@ def test_writing_search_modes_preserve_room_priority(mode, expected_rooms, monke
     assert [hit["room"] for hit in result["results"]] == expected_rooms[: len(result["results"])]
     assert len({(hit["source_file"], hit["text"]) for hit in result["results"]}) == len(result["results"])
 
+def test_writing_search_budget_controls_backend_depth(monkeypatch):
+    calls = []
+
+    def fake_search_memories(query, palace_path, wing=None, room=None, n_results=5):
+        calls.append({"room": room, "n_results": n_results})
+        return {
+            "query": query,
+            "filters": {"wing": wing, "room": room},
+            "results": [
+                {
+                    "room": room,
+                    "source_file": f"{room}-{idx}.md",
+                    "similarity": 0.9 - (idx * 0.01),
+                    "text": f"{room} hit {idx}",
+                }
+                for idx in range(n_results)
+            ],
+        }
+
+    monkeypatch.setattr("writing_sidecar.workflow._search_writing_sidecar_fast", lambda **kwargs: None)
+    monkeypatch.setattr("writing_sidecar.workflow.search_memories", fake_search_memories)
+
+    result = search_writing_sidecar(
+        query="chapter six handoff",
+        palace_path="C:/fake-palace",
+        wing="witcher_dc_writing_sidecar",
+        mode="planning",
+        n_results=3,
+        budget="deep",
+    )
+
+    assert result["budget"] == "deep"
+    assert len(result["results"]) == 3
+    assert calls
+    assert {call["n_results"] for call in calls} == {6}
+
+def test_writing_search_blends_local_keyword_hits(monkeypatch):
+    tmp_path = make_temp_dir()
+    try:
+        sidecar_root = tmp_path / ".sidecars" / "witcher_dc"
+        write_file(
+            sidecar_root / "brainstorms" / "2026-04-24_chapter-6_no_private_fronts_handoff.md",
+            "# Chapter 6 Handoff\n\nBatman, Diana, Arthur, and Hal converge at the first pressure point.",
+        )
+
+        monkeypatch.setattr("writing_sidecar.workflow._search_writing_sidecar_fast", lambda **kwargs: None)
+        monkeypatch.setattr(
+            "writing_sidecar.workflow.search_memories",
+            lambda **kwargs: {"query": kwargs["query"], "results": []},
+        )
+
+        result = search_writing_sidecar(
+            query="Chapter 6 handoff",
+            palace_path="C:/fake-palace",
+            wing="witcher_dc_writing_sidecar",
+            mode="planning",
+            n_results=3,
+            budget="deep",
+            sidecar_root=str(sidecar_root),
+        )
+
+        assert result["results"][0]["source_file"] == "2026-04-24_chapter-6_no_private_fronts_handoff.md"
+        assert result["results"][0]["match_type"] == "keyword"
+        assert "Batman, Diana, Arthur, and Hal" in result["results"][0]["text"]
+    finally:
+        cleanup_temp_dir(tmp_path)
+
 def test_scaffold_writing_sidecar_creates_files_and_respects_force():
     tmp_path = make_temp_dir()
     try:

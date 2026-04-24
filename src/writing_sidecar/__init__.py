@@ -1,6 +1,7 @@
 from .workflow import (
     CONTEXT_MODES,
     RECAP_MODES,
+    RETRIEVAL_BUDGETS,
     SEARCH_MODE_ROOMS,
     STATE_FILENAME,
     build_writing_context,
@@ -32,6 +33,7 @@ from .workflow import (
 __all__ = [
     "CONTEXT_MODES",
     "RECAP_MODES",
+    "RETRIEVAL_BUDGETS",
     "SEARCH_MODE_ROOMS",
     "STATE_FILENAME",
     "build_writing_context",

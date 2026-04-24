@@ -46,6 +46,7 @@ writing-sidecar routine <vault-or-project> --project Witcher-DC --name start-wor
 writing-sidecar session <vault-or-project> --project Witcher-DC --task scripting
 writing-sidecar context <vault-or-project> --project Witcher-DC
 writing-sidecar search <vault-or-project> --project Witcher-DC --query "Arthur sponsorship"
+writing-sidecar search <vault-or-project> --project Witcher-DC --query "Chapter 6 handoff" --budget deep
 writing-sidecar recap <vault-or-project> --project Witcher-DC --mode restart
 writing-sidecar verify <vault-or-project> --project Witcher-DC --scope chapter
 writing-sidecar maintain <vault-or-project> --project Witcher-DC --kind checkpoint --write
@@ -99,6 +100,8 @@ If you want to point at a different real vault path, set `WRITING_SIDECAR_LIVE_V
 - tracks state in `.writing-sidecar-state.json`
 - rebuilds only when inputs actually changed
 - searches by intent instead of dumping all rooms together
+- separates retrieval budget (`quick`, `normal`, `deep`) from final result count for local-only deeper searches
+- blends local keyword/filename hits into `--budget deep` searches so obvious handoff/title queries are not missed
 - exports Codex-ready helper packets and suggested-create automation packets through deterministic `automate` output
 - packages common work sessions with deterministic `routine` runbooks
 - packages transition moments with deterministic `bundle` runbooks

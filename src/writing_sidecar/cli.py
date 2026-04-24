@@ -18,6 +18,7 @@ from .workflow import (
     CONTEXT_MODES,
     MAINTAIN_KINDS,
     RECAP_MODES,
+    RETRIEVAL_BUDGETS,
     ROUTINE_NAMES,
     SEARCH_MODE_ROOMS,
     SESSION_TASKS,
@@ -303,6 +304,8 @@ def cmd_search(args):
                 wing=_project_wing(status["project"]),
                 mode=args.mode,
                 n_results=args.results,
+                budget=args.budget,
+                sidecar_root=status["output_root"],
             )
 
         if results.get("error"):
@@ -367,6 +370,8 @@ def cmd_sync(args):
                     wing=_project_wing(status["project"]),
                     mode=args.mode,
                     n_results=args.results,
+                    budget=args.budget,
+                    sidecar_root=status["output_root"],
                 )
                 if results.get("error"):
                     print(f"\n  Search error: {results['error']}")
@@ -718,6 +723,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="If a rebuild happens, recreate the target palace from scratch first",
     )
     p_search.add_argument("--results", type=int, default=5, help="Number of search results to show")
+    p_search.add_argument(
+        "--budget",
+        choices=RETRIEVAL_BUDGETS,
+        default="normal",
+        help="Retrieval depth before final result trimming (default: normal)",
+    )
     _add_format_arg(p_search)
 
     p_sync = sub.add_parser("sync", help="Export and mine a writing sidecar, then optionally search")
@@ -738,6 +749,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_sync.add_argument("--room", default=None, help="Optional room filter for the post-sync search")
     p_sync.add_argument("--results", type=int, default=5, help="Number of post-sync search results to show")
+    p_sync.add_argument(
+        "--budget",
+        choices=RETRIEVAL_BUDGETS,
+        default="normal",
+        help="Retrieval depth before final result trimming for intent-aware post-sync search (default: normal)",
+    )
 
     p_doctor = sub.add_parser("doctor", help="Verify MemPalace compatibility and sidecar path health")
     _shared_project_args(p_doctor)

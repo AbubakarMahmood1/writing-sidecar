@@ -60,6 +60,7 @@ Quick chooser:
 - use `writing-sidecar search --mode audit` for “what failed / what should stay cut”
 - use `writing-sidecar search --mode history` for “what did we already decide”
 - use `writing-sidecar search --mode research` for reference-heavy retrieval
+- use `writing-sidecar search --budget deep` when the result count should stay small but the local candidate pool should be searched harder
 - use `writing-sidecar recap --mode restart` after a long break
 - use `writing-sidecar recap --mode handoff` before handing work to another assistant or another session
 - use `writing-sidecar recap --mode continuity` when the main risk is drift, obligations, or timeline confusion

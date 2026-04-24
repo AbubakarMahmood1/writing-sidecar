@@ -328,6 +328,40 @@ def test_cli_json_output_for_status_context_projects_doctor_session_verify_and_a
     finally:
         cleanup_temp_dir(tmp_path)
 
+def test_cli_search_and_sync_accept_retrieval_budget():
+    import writing_sidecar.cli as cli
+
+    parser = cli.build_parser()
+    search_args = parser.parse_args(
+        [
+            "search",
+            "C:/vault",
+            "--project",
+            "Witcher-DC",
+            "--query",
+            "chapter six",
+            "--budget",
+            "deep",
+        ]
+    )
+    sync_args = parser.parse_args(
+        [
+            "sync",
+            "C:/vault",
+            "--project",
+            "Witcher-DC",
+            "--query",
+            "chapter six",
+            "--mode",
+            "planning",
+            "--budget",
+            "quick",
+        ]
+    )
+
+    assert search_args.budget == "deep"
+    assert sync_args.budget == "quick"
+
 def test_cli_context_recap_session_verify_bundle_routine_and_automate_support_out_files(monkeypatch):
     import writing_sidecar.cli as cli
 
