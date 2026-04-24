@@ -14,6 +14,7 @@ HEALTH_HISTORY_LIMIT = 200
 HEALTH_SUMMARY_WINDOW = 50
 HEALTH_MIN_SAMPLES = 5
 HEALTH_LATENCY_MIN_FAMILY_SAMPLES = 3
+HEALTH_P95_MIN_FAMILY_SAMPLES = 20
 BACKEND_REVIEW_REASONS = {
     "sync_latency_review",
     "query_latency_review",
@@ -128,7 +129,10 @@ def _family_metrics(window: list[dict], family: str) -> dict:
     return {
         "sample_count": len(values),
         "median_ms": _median(values),
-        "p95_ms": _p95(values),
+        # With a tiny sample set, p95 collapses to the max and turns one timeout
+        # into a fake backend crisis. Keep p95 unavailable until it has enough
+        # observations to act like a percentile instead of an outlier alarm.
+        "p95_ms": _p95(values) if len(values) >= HEALTH_P95_MIN_FAMILY_SAMPLES else None,
     }
 
 

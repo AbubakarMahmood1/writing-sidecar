@@ -115,6 +115,29 @@ def test_single_slow_sync_sample_does_not_trigger_backend_review(tmp_path):
     assert summary["backend_review_due"] is False
 
 
+def test_single_slow_query_sample_does_not_trigger_backend_review(tmp_path):
+    output_root = tmp_path / ".sidecars" / "demo"
+
+    _emit_health_event(
+        output_root,
+        command="search",
+        command_family="query",
+        duration_ms=95000,
+    )
+    for _ in range(4):
+        summary = _emit_health_event(
+            output_root,
+            command="verify",
+            command_family="query",
+            duration_ms=1000,
+        )
+
+    assert summary["health_state"] == "clean"
+    assert "query_latency_review" not in summary["health_reasons"]
+    assert summary["health_metrics"]["command_families"]["query"]["p95_ms"] is None
+    assert summary["backend_review_due"] is False
+
+
 def test_fact_noise_review_does_not_trigger_backend_review(tmp_path):
     output_root = tmp_path / ".sidecars" / "demo"
 
