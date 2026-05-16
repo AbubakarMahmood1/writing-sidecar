@@ -8,14 +8,8 @@ import pytest
 
 from writing_sidecar.mempalace_adapter import SUPPORTED_MEMPALACE_SPEC
 from writing_sidecar.workflow import (
-    FACT_LOG_FILENAME,
-    FACT_PREVIEW_FILENAME,
-    FACTS_SNAPSHOT_FILENAME,
     ONNX_MODEL_CACHE_FILES,
     STATE_FILENAME,
-    _collect_carry_forward_gap_findings,
-    _build_checkpoint_sections,
-    _fact_identity,
     build_writing_automation,
     build_writing_bundle,
     build_writing_context,

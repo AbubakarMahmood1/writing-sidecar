@@ -4784,7 +4784,6 @@ def _build_single_maintenance_artifact(
     project_name = status["project"]
     date_stamp = datetime.now().astimezone().strftime("%Y-%m-%d")
     phase = _extract_phase(doc_bundle)
-    current_status = _extract_field(doc_bundle, "status") or "TBD"
     next_action = _extract_field(doc_bundle, "next_action") or "TBD"
     working_title = _extract_field(doc_bundle, "working_title")
 
@@ -8533,7 +8532,6 @@ def _extract_fact_candidates(status: dict, bundle: dict, scope: str) -> list[dic
 
     current_notes = bundle.get("current_notes", {})
     current_chapter = bundle.get("current_chapter_notes", {})
-    story_so_far = bundle.get("story_so_far", {})
 
     project_fact_specs = (
         (current_notes, "current_notes", "status", "project_state", "project", "status"),
