@@ -248,6 +248,9 @@ def normalize_for_snapshot(payload, context: dict):
             }
             if {"id", "kind", "severity"}.issubset(normalized_dict):
                 normalized_dict["id"] = f"<FINDING_ID:{normalized_dict['kind']}>"
+            if normalized_dict.get("name") == "codex_home":
+                normalized_dict["detail"] = "<CODEX_HOME_DETAIL>"
+                normalized_dict["status"] = "<CODEX_HOME_STATUS>"
             if (
                 normalized_dict.get("type") == "file"
                 and isinstance(normalized_dict.get("path"), str)
