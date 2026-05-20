@@ -3,7 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from writing_sidecar.health import command_family, health_latest_path, load_health_summary, record_health_event
+from writing_sidecar.health import (
+    command_family,
+    health_history_path,
+    health_latest_path,
+    load_health_summary,
+    record_health_event,
+)
 
 
 def _emit_health_event(
@@ -242,3 +248,52 @@ def test_corpus_size_review_triggers_backend_review(tmp_path):
     assert "corpus_size_review" in summary["health_reasons"]
     assert summary["backend_review_due"] is True
     assert loaded["health_state"] == "review"
+
+
+def test_load_health_summary_falls_back_to_default_on_schema_mismatch_without_history(tmp_path):
+    output_root = tmp_path / ".sidecars" / "demo"
+    latest_path = health_latest_path(output_root)
+    latest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    stale_summary = {
+        "health_schema_version": 1,
+        "project": "Demo",
+        "health_state": "clean",
+    }
+    latest_path.write_text(json.dumps(stale_summary), encoding="utf-8")
+    health_history_path(output_root).write_text("", encoding="utf-8")
+
+    loaded = load_health_summary(output_root)
+    assert loaded["health_schema_version"] == 2
+    assert loaded["health_state"] == "unknown"
+
+
+def test_load_health_summary_replaces_null_identity_fields(tmp_path):
+    output_root = tmp_path / ".sidecars" / "demo"
+    project_root = tmp_path / "vault" / "projects" / "Demo"
+    vault_root = tmp_path / "vault"
+    latest_path = health_latest_path(output_root)
+    latest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    latest_path.write_text(
+        json.dumps(
+            {
+                "health_schema_version": 2,
+                "project": None,
+                "project_root": None,
+                "vault_root": None,
+                "health_state": "clean",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_health_summary(
+        output_root,
+        project="Demo",
+        project_root=project_root,
+        vault_root=vault_root,
+    )
+    assert loaded["project"] == "Demo"
+    assert loaded["project_root"] == str(project_root)
+    assert loaded["vault_root"] == str(vault_root)

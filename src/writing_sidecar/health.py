@@ -293,6 +293,8 @@ def load_health_summary(output_root: Path, *, project=None, project_root=None, v
                 latest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             except OSError:
                 pass
+        else:
+            payload = None
     if not payload:
         return _default_health_summary(
             output_root,
@@ -301,9 +303,20 @@ def load_health_summary(output_root: Path, *, project=None, project_root=None, v
             vault_root=vault_root,
         )
     payload.setdefault("health_schema_version", HEALTH_SUMMARY_SCHEMA_VERSION)
-    payload.setdefault("project", project)
-    payload.setdefault("project_root", str(project_root) if project_root else None)
-    payload.setdefault("vault_root", str(vault_root) if vault_root else None)
+    if project is not None and (payload.get("project") is None):
+        payload["project"] = project
+    else:
+        payload.setdefault("project", project)
+
+    if project_root is not None and (payload.get("project_root") is None):
+        payload["project_root"] = str(project_root)
+    else:
+        payload.setdefault("project_root", str(project_root) if project_root else None)
+
+    if vault_root is not None and (payload.get("vault_root") is None):
+        payload["vault_root"] = str(vault_root)
+    else:
+        payload.setdefault("vault_root", str(vault_root) if vault_root else None)
     payload.setdefault("updated_at", None)
     payload.setdefault("health_state", "unknown")
     payload.setdefault("backend_review_due", False)
