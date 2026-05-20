@@ -124,6 +124,17 @@ Default project paths:
 - `.palaces/<project>`
 - `.mempalace-sidecar-runtime/<project>`
 
+Project config can override those defaults without repeating CLI flags:
+
+```yaml
+paths:
+  output_root: "{vault}/_runtime/sidecars/{project_slug}"
+  palace_path: "{vault}/_runtime/palaces/{project_slug}"
+  runtime_root: "{vault}/_runtime/mempalace-sidecar/{project_slug}"
+```
+
+Supported path tokens: `{vault}`, `{vault_root}`, `{project_root}`, `{project}`, and `{project_slug}`. Relative paths resolve from the directory containing `writing-sidecar.yaml`. CLI flags still win over config paths.
+
 Fixed rooms:
 
 - `chat_process`

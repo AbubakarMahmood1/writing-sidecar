@@ -50,6 +50,8 @@ DEFAULT_WRITING_CONFIG_FILENAMES = ("writing-sidecar.yaml", "writing-sidecar.yml
 DEFAULT_SIDECAR_OUTPUT_DIRNAME = ".sidecars"
 DEFAULT_SIDECAR_PALACE_DIRNAME = ".palaces"
 DEFAULT_RUNTIME_DIRNAME = ".mempalace-sidecar-runtime"
+CONFIG_PATH_SECTION = "paths"
+CONFIG_PATH_KEYS = ("output_root", "palace_path", "runtime_root")
 STATE_FILENAME = ".writing-sidecar-state.json"
 VERIFY_CACHE_FILENAME = ".writing-sidecar-verify.json"
 FACTS_DIRNAME = "facts"
@@ -645,24 +647,34 @@ def _prepare_writing_context(
     project_name = resolved_project["project"]
     project_root = resolved_project["project_root"]
     vault_root = resolved_project["vault_root"]
+    writing_config, loaded_config_path = _load_writing_export_config(project_root, config_path)
+    config_base_dir = loaded_config_path.parent if loaded_config_path else project_root
+    config_paths = _resolve_config_path_defaults(
+        writing_config,
+        config_base_dir=config_base_dir,
+        vault_root=vault_root,
+        project_root=project_root,
+        project=project_name,
+    )
     output_root = (
         Path(out_dir).expanduser().resolve()
         if out_dir
-        else default_output_dir(vault_root, project_name).resolve()
+        else config_paths.get("output_root")
+        or default_output_dir(vault_root, project_name).resolve()
     )
     codex_root = Path(codex_home).expanduser().resolve() if codex_home else DEFAULT_CODEX_HOME
     target_palace = (
         Path(palace_path).expanduser().resolve()
         if palace_path
-        else default_palace_dir(vault_root, project_name).resolve()
+        else config_paths.get("palace_path")
+        or default_palace_dir(vault_root, project_name).resolve()
     )
     sidecar_runtime_root = (
         Path(runtime_root).expanduser().resolve()
         if runtime_root
-        else default_runtime_dir(vault_root, project_name).resolve()
+        else config_paths.get("runtime_root")
+        or default_runtime_dir(vault_root, project_name).resolve()
     )
-    writing_config, loaded_config_path = _load_writing_export_config(project_root, config_path)
-    config_base_dir = loaded_config_path.parent if loaded_config_path else project_root
     project_terms = _build_project_terms(
         project_name,
         project_root,
@@ -7784,6 +7796,67 @@ def _load_writing_export_config(project_root: Path, config_path: str = None):
     if not isinstance(data, dict):
         raise ValueError("Writing sidecar config must be a mapping")
     return data, candidate
+
+
+def _resolve_config_path_defaults(
+    writing_config: dict,
+    *,
+    config_base_dir: Path,
+    vault_root: Path,
+    project_root: Path,
+    project: str,
+) -> dict[str, Path]:
+    paths_config = writing_config.get(CONFIG_PATH_SECTION, {})
+    if paths_config is None:
+        paths_config = {}
+    if not isinstance(paths_config, dict):
+        raise ValueError("Writing sidecar paths config must be a mapping")
+
+    defaults = {}
+    for key in CONFIG_PATH_KEYS:
+        raw_path = paths_config.get(key, writing_config.get(key))
+        resolved = _resolve_config_path_value(
+            raw_path,
+            key=key,
+            config_base_dir=config_base_dir,
+            vault_root=vault_root,
+            project_root=project_root,
+            project=project,
+        )
+        if resolved is not None:
+            defaults[key] = resolved
+    return defaults
+
+
+def _resolve_config_path_value(
+    raw_path,
+    *,
+    key: str,
+    config_base_dir: Path,
+    vault_root: Path,
+    project_root: Path,
+    project: str,
+) -> Path | None:
+    if raw_path in (None, ""):
+        return None
+    if not isinstance(raw_path, (str, Path)):
+        raise ValueError(f"Writing sidecar paths.{key} must be a string path")
+
+    value = os.path.expandvars(str(raw_path))
+    replacements = {
+        "vault": str(vault_root),
+        "vault_root": str(vault_root),
+        "project_root": str(project_root),
+        "project": project,
+        "project_slug": _project_slug(project),
+    }
+    for token, replacement in replacements.items():
+        value = value.replace(f"{{{token}}}", replacement)
+
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = config_base_dir / candidate
+    return candidate.resolve()
 
 
 def _infer_vault_root_from_project_root(project_root: Path) -> Path:

@@ -232,6 +232,66 @@ def test_export_writing_corpus_auto_resolves_project_name_from_project_dir():
     finally:
         cleanup_temp_dir(tmp_path)
 
+def test_config_paths_supply_runtime_defaults_and_cli_overrides():
+    tmp_path = make_temp_dir()
+    try:
+        vault_root = tmp_path / "vault"
+        project_root = vault_root / "projects" / "fiction" / "Witcher-DC"
+        output_root = vault_root / "_runtime" / "sidecars" / "witcher_dc"
+        palace_root = vault_root / "_runtime" / "palaces" / "witcher_dc"
+        runtime_root = vault_root / "_runtime" / "mempalace-sidecar" / "witcher_dc"
+
+        write_file(
+            project_root / "writing-sidecar.yaml",
+            textwrap.dedent(
+                """
+                paths:
+                  output_root: "{vault}/_runtime/sidecars/{project_slug}"
+                  palace_path: "{vault}/_runtime/palaces/{project_slug}"
+                  runtime_root: "{vault}/_runtime/mempalace-sidecar/{project_slug}"
+                brainstorms: []
+                audits: []
+                discarded_paths: []
+                """
+            ).strip()
+            + "\n",
+        )
+        write_file(project_root / "_story_bible" / "research" / "dc.md", "Apokolips research")
+
+        summary = export_writing_corpus(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+        )
+        status = get_writing_sidecar_status(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+        )
+
+        assert summary["output_root"] == str(output_root.resolve())
+        assert summary["palace_path"] == str(palace_root.resolve())
+        assert summary["runtime_root"] == str(runtime_root.resolve())
+        assert status["built"] is True
+        assert status["output_root"] == str(output_root.resolve())
+        assert status["palace_path"] == str(palace_root.resolve())
+        assert status["runtime_root"] == str(runtime_root.resolve())
+
+        override_output = tmp_path / "override-sidecar"
+        override_palace = tmp_path / "override-palace"
+        override_runtime = tmp_path / "override-runtime"
+        override_status = get_writing_sidecar_status(
+            vault_dir=str(vault_root),
+            project="Witcher-DC",
+            out_dir=str(override_output),
+            palace_path=str(override_palace),
+            runtime_root=str(override_runtime),
+        )
+
+        assert override_status["output_root"] == str(override_output.resolve())
+        assert override_status["palace_path"] == str(override_palace.resolve())
+        assert override_status["runtime_root"] == str(override_runtime.resolve())
+    finally:
+        cleanup_temp_dir(tmp_path)
+
 def test_writing_status_handles_not_built_and_clean_state():
     tmp_path = make_temp_dir()
     try:
