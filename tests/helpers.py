@@ -224,6 +224,7 @@ def _path_replacements(context: dict) -> list[tuple[str, str]]:
 
 def normalize_for_snapshot(payload, context: dict):
     replacements = _path_replacements(context)
+    path_placeholders = [placeholder for _, placeholder in replacements]
 
     def normalize(value, *, key: str | None = None):
         if key in TIMESTAMP_KEYS and value is not None:
@@ -236,6 +237,13 @@ def normalize_for_snapshot(payload, context: dict):
             }
             if {"id", "kind", "severity"}.issubset(normalized_dict):
                 normalized_dict["id"] = f"<FINDING_ID:{normalized_dict['kind']}>"
+            if (
+                normalized_dict.get("type") == "file"
+                and isinstance(normalized_dict.get("path"), str)
+                and normalized_dict["path"].startswith("<OUTPUT_ROOT>\\")
+                and normalized_dict.get("size") is not None
+            ):
+                normalized_dict["size"] = "<SIZE>"
             return normalized_dict
         if isinstance(value, list):
             return [normalize(item, key=key) for item in value]
@@ -246,6 +254,8 @@ def normalize_for_snapshot(payload, context: dict):
             for actual, placeholder in replacements:
                 normalized = normalized.replace(actual, placeholder)
                 normalized = normalized.replace(actual.replace("\\", "/"), placeholder)
+            for placeholder in path_placeholders:
+                normalized = normalized.replace(f"{placeholder}/", f"{placeholder}\\")
             normalized = TIMESTAMP_PATTERN.sub("<TIMESTAMP>", normalized)
             normalized = DATE_STAMP_PATTERN.sub("<DATE>", normalized)
             normalized = SHA256_PATTERN.sub("<SHA256>", normalized)
@@ -260,7 +270,7 @@ def normalize_for_snapshot(payload, context: dict):
 
 
 def assert_matches_json_snapshot(actual_payload, snapshot_file: Path, context: dict):
-    expected = json.loads(snapshot_file.read_text(encoding="utf-8"))
+    expected = normalize_for_snapshot(json.loads(snapshot_file.read_text(encoding="utf-8")), context)
     actual = normalize_for_snapshot(actual_payload, context)
     if actual == expected:
         return
